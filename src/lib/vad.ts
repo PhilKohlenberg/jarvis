@@ -64,15 +64,26 @@ export type Vad = {
  *  comfortably and a voice through a door or wall usually does not. Raise
  *  further if distant speech still triggers him; lower it if he starts
  *  missing quiet, close speech. */
-const TRIGGER_OVER_FLOOR = 4.2
+const TRIGGER_OVER_FLOOR = 5.0
 /** While he is speaking, demand this much more, so residual echo is ignored. */
 const GUARD_BOOST = 2.4
 /** Falling back below trigger×this ends the segment. Hysteresis stops a single
  *  dip mid-word from cutting a sentence in half. */
 const RELEASE_RATIO = 0.6
 
-/** Sustained energy for this long confirms speech rather than a knock or click. */
-const START_MS = 110
+/**
+ * Sustained energy for this long confirms speech rather than a knock or click.
+ *
+ * Raised from 110: that was enough for a sharp cough or a dropped object to
+ * read as speech and barge in — this is pure energy-over-threshold with no
+ * notion of what a voice actually sounds like, so anything loud enough and
+ * held for the confirm window passes. A real utterance easily holds this
+ * long; a single cough burst usually doesn't. Not a full fix — a loud,
+ * sustained cough can still clear it, since there is no spectral check here
+ * — and this can only really be tuned by ear against Phil's own room and his
+ * own coughs, not verified from here.
+ */
+const START_MS = 200
 /**
  * Quiet for this long ends the SEGMENT — which is no longer the same thing as
  * ending the turn.
