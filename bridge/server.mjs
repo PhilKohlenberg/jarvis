@@ -29,6 +29,9 @@ import { codeAgentServer } from './codeagent.mjs'
 import { pushConfigured, pushNotify } from './push.mjs'
 import { calendarServer, calendarConfigured } from './calendar.mjs'
 import { watchStatus } from './statuswatch.mjs'
+import { reminderServer } from './reminder.mjs'
+import { watchWeather } from './weatherwatch.mjs'
+import { musicServer } from './music.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -349,10 +352,25 @@ function decideTool(name) {
     // ALLOW_MAIL_SEND above for why that's the switch and not a restart.
     if (server === 'jarvis_tour32') return true
 
-    // Phil's calendar, over CalDAV — read-only, same as the vault and the
-    // mailbox. There is no write tool on this server at all (see
-    // calendar.mjs), so there is nothing here for ALLOW_WRITES to gate.
-    if (server === 'jarvis_calendar') return true
+    // Phil's calendar, over CalDAV. Reading is always on, same as the vault
+    // and the mailbox. calendar_create_event actually writes a new real
+    // appointment, so it answers to ALLOW_WRITES like Bash/Write do, rather
+    // than the prompt-only restraint mail_send/tour32_append_case rely on —
+    // a misheard date creating the wrong appointment is a cheap enough
+    // mistake that a mechanical gate is worth having on top of the prompt.
+    if (server === 'jarvis_calendar') {
+      return mcpToolOf(name) === 'calendar_create_event' ? ALLOW_WRITES : true
+    }
+
+    // A reminder is an in-memory timer, not a change to anything real — the
+    // same reasoning that keeps the vault and mailbox reads off ALLOW_WRITES.
+    if (server === 'jarvis_reminder') return true
+
+    // A media-key press is a real action on the machine (skips/pauses
+    // whatever is actually playing), so it answers to ALLOW_WRITES like
+    // Bash/Write do — low blast radius, but still something happening in
+    // the world rather than a read.
+    if (server === 'jarvis_music') return ALLOW_WRITES
 
     // A real Claude Code session with full Bash/Edit/Write in a project
     // directory — the biggest hammer this bridge has. Answers to
@@ -519,6 +537,9 @@ support-case folder:
   case log. Only call it when Phil has said out loud, this conversation, to
   record it — and follow the file's own schema, which \`tour32_read\` on
   Wissensbasis_TOUR32.md shows you if you haven't seen it this session.
+- \`tour32_trends\` for "welche Fehler häufen sich" / "was sind unsere
+  größten Baustellen" — a tally of Kategorie/Tag across every logged case,
+  not a search for one.
 
 Morgenbriefing — triggered by "Morgenbriefing bitte" (sent automatically on
 the first wake of the day, or spoken any time Phil asks for it):
@@ -534,13 +555,38 @@ the first wake of the day, or spoken any time Phil asks for it):
 - This is the one case where the two-sentence ceiling above does not apply —
   it is exactly the "reading out data they asked for" exception already
   named there.
+- On a Monday, widen it into a week-in-review: also call \`tour32_trends\`
+  (what's been recurring lately) and \`mail_list\` with a larger limit
+  (around 30) so the mail summary actually covers the week, not just
+  overnight. Same speaking style — a few added clauses, not a second report.
 
-His calendar — \`calendar_events\`, on his real David calendar over CalDAV:
-- Read-only, no confirmation ever needed. Reach for it whenever he asks
-  what's on today or in the coming days, or as part of a morning briefing.
+His calendar — \`calendar_events\`/\`calendar_create_event\`, on his real
+David calendar over CalDAV:
+- \`calendar_events\` is read-only, no confirmation ever needed. Reach for
+  it whenever he asks what's on today or in the coming days, or as part of
+  a morning briefing.
 - A recurring event is reported as recurring, not dated — say so plainly
   ("wiederkehrend") rather than inventing a specific occurrence date.
-- If it reports itself unconfigured, say so plainly and move on.
+- \`calendar_create_event\` actually creates the appointment, immediately,
+  and — unlike everything else here — it CANNOT be undone through you:
+  there is no cancel/delete tool, because deleting doesn't work on this
+  calendar server at all (confirmed by hand). Only the title, date and time
+  Phil actually said — never invent or round one — and if anything about
+  the time is even slightly ambiguous, say back what you're about to
+  create and get a yes first. If he asks to remove or change something you
+  created, tell him plainly it has to be done by hand in his David client.
+- If either reports itself unconfigured, say so plainly and move on.
+
+Music — \`music_control\`, play_pause/next/previous only:
+- Sends an actual media-key press to whatever currently owns the system
+  media session — usually Spotify, if that's playing. Can't search for or
+  start a specific song; if he asks for one, say so plainly.
+
+Reminders — \`remind_me\`, in memory only:
+- Whenever Phil asks to be reminded of something or wants a timer. Say the
+  delay back once you've set it; do not restate it when it fires later.
+- A bridge restart cancels every pending reminder — say so if he asks
+  whether one is still set and you have reason to think the bridge restarted.
 
 A real coding agent — \`code_run_task\`, one project directory at a time:
 - Only reach for it once Phil has clearly asked for code to be written,
@@ -1196,6 +1242,13 @@ function broadcast(msg) {
   }
 }
 
+/** Spoken notification + phone push, together — what a reminder firing (or
+ *  new mail, or a status change) means on every channel this bridge has. */
+function notifyAll(text, pushTitle) {
+  broadcast({ type: 'notify', text })
+  void pushNotify(text, { title: pushTitle })
+}
+
 /**
  * Does this look like a support case worth auto-triaging, rather than a
  * newsletter or an ordinary reply? A cheap keyword check, not a model call —
@@ -1296,6 +1349,26 @@ if (STATUS_URL) {
   console.log(`[jarvis] watching ${STATUS_URL} for uptime`)
 } else {
   console.log('[jarvis] status watch disabled — set JARVIS_STATUS_URL or JARVIS_MAIL_HOST')
+}
+
+/**
+ * Proactive rain warning. Location defaults to Stadtoldendorf (Phil's own
+ * town, PLZ 37627) — override with JARVIS_WEATHER_LOCATION for a different
+ * place, or set it empty to disable.
+ */
+const WEATHER_LOCATION = process.env.JARVIS_WEATHER_LOCATION ?? 'Stadtoldendorf'
+if (WEATHER_LOCATION) {
+  watchWeather({
+    location: WEATHER_LOCATION,
+    onWarn: ({ probability }) => {
+      const text = `Regen wahrscheinlich heute in ${WEATHER_LOCATION}, ${probability} Prozent. Fenster zu.`
+      console.log(`[jarvis] weather warning: ${text}`)
+      notifyAll(text, 'JARVIS · Wetter')
+    },
+  })
+  console.log(`[jarvis] watching weather for ${WEATHER_LOCATION}`)
+} else {
+  console.log('[jarvis] weather watch disabled — set JARVIS_WEATHER_LOCATION to enable')
 }
 
 console.log(`[jarvis] bridge listening on ws://localhost:${PORT}`)
@@ -1561,6 +1634,11 @@ wss.on('connection', (socket) => {
         jarvis_code: codeAgentServer(),
         // Phil's David calendar, over CalDAV — read-only, no write tool exists.
         jarvis_calendar: calendarServer(),
+        // In-memory spoken reminders, over the same notify channel as mail
+        // and status alerts.
+        jarvis_reminder: reminderServer((text) => notifyAll(text, 'JARVIS · Erinnerung')),
+        // Media-key playback control — play/pause/next/previous only.
+        jarvis_music: musicServer(),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk

@@ -236,6 +236,40 @@ export function tour32Server() {
       ),
 
       tool(
+        'tour32_trends',
+        `Count how often each Kategorie/Tag value appears across every case
+entry in Wissensbasis_TOUR32.md (every "- **...**: ... | Kategorie/Tag: ... |
+..." bullet, not just the open-cases section), and return the most frequent
+ones. Use this for "welche Fehler häufen sich" / "was sind unsere größten
+Baustellen" type questions — it's a tally, not a search for one case.`,
+        {
+          top: z.number().int().min(1).max(30).optional().catch(undefined)
+            .describe('How many tags to return, most frequent first. Default 10.'),
+        },
+        async (args) => {
+          let text
+          try {
+            text = await readFile(WISSENSBASIS, 'utf8')
+          } catch (err) {
+            return { isError: true, content: [{ type: 'text', text: `Could not read the case log: ${err?.message ?? err}` }] }
+          }
+          const counts = new Map()
+          for (const m of text.matchAll(/Kategorie\/Tag:\s*([^|]+)\|/g)) {
+            for (const tag of m[1].split(',').map((t) => t.trim()).filter(Boolean)) {
+              counts.set(tag, (counts.get(tag) ?? 0) + 1)
+            }
+          }
+          if (!counts.size) return { content: [{ type: 'text', text: '(keine Kategorie/Tag-Einträge gefunden)' }] }
+          const top = args.top ?? 10
+          const lines = [...counts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, top)
+            .map(([tag, n]) => `${tag}: ${n}`)
+          return { content: [{ type: 'text', text: lines.join('\n') }] }
+        },
+      ),
+
+      tool(
         'tour32_append_case',
         APPEND_CASE_DESCRIPTION,
         {

@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { request as httpsRequest } from 'node:https'
+import { randomUUID } from 'node:crypto'
 
 /**
  * Phil's calendar, over CalDAV on the same Tobit David server as mail.mjs.
@@ -30,9 +31,20 @@ import { request as httpsRequest } from 'node:https'
  * calendar engine's job, not a home-grown regex's. A recurring hit is
  * reported as such rather than attached to a wrong date.
  *
- * Read-only. Only GET and REPORT are used, never PUT/DELETE, so this can't
- * create or corrupt an appointment. Same self-signed-cert situation as
- * mail.mjs, so the same TLS flag governs both.
+ * calendar_events is read-only (GET/REPORT only). calendar_create_event
+ * uses PUT to add a real appointment — confirmed working by hand (201,
+ * event actually appears). DELETE, by contrast, does NOT work on this
+ * WebBox version: it answers 200 whether given the resource's own path,
+ * its server-assigned internal filename, or an If-Match with the current
+ * ETag, and the event is still there afterwards every time — confirmed by
+ * hand, cost a real leftover test appointment on Phil's actual calendar
+ * that had to be deleted by hand in the David client. So there is
+ * deliberately no delete/cancel tool here: it would lie about succeeding.
+ * Getting calendar_create_event's inputs right matters more than usual,
+ * because a mistake can't be undone through this module at all.
+ *
+ * Same self-signed-cert situation as mail.mjs, so the same TLS flag governs
+ * both.
  */
 
 const HOST = process.env.JARVIS_MAIL_HOST ?? ''
@@ -58,7 +70,7 @@ const PRINCIPAL_PATH = () => `/caldav/${encodeURIComponent(USER)}/`
  * confirmed by hand, the REPORT-then-GET sequence below reliably hung up the
  * socket on the second request until every request got its own connection.
  */
-function davRequest(method, path, { depth, body } = {}) {
+function davRequest(method, path, { depth, body, contentType = 'application/xml; charset=utf-8' } = {}) {
   return new Promise((resolve, reject) => {
     const auth = 'Basic ' + Buffer.from(`${USER}:${PASSWORD}`).toString('base64')
     const payload = body ? Buffer.from(body, 'utf8') : null
@@ -76,9 +88,7 @@ function davRequest(method, path, { depth, body } = {}) {
           Authorization: auth,
           Connection: 'close',
           ...(depth !== undefined ? { Depth: String(depth) } : {}),
-          ...(payload
-            ? { 'Content-Type': 'application/xml; charset=utf-8', 'Content-Length': payload.length }
-            : {}),
+          ...(payload ? { 'Content-Type': contentType, 'Content-Length': payload.length } : {}),
         },
       },
       (res) => {
@@ -131,6 +141,21 @@ function formatWhen(value) {
   if (!m) return value
   const [, y, mo, da, h, mi] = m
   return `${da}.${mo}.${y} ${h}:${mi}`
+}
+
+/** RFC 5545 TEXT escaping — the four characters that mean something to an
+ *  ICS parser (backslash itself has to go first). */
+const escapeIcsText = (s) =>
+  String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n')
+
+/** "2026-09-20T14:00" (Phil's own local time, no offset) parsed as this
+ *  machine's local time — same assumption formatWhen's output already
+ *  makes — then rendered as the UTC stamp CalDAV wants. Avoids needing a
+ *  VTIMEZONE block entirely. */
+function localToUtcStamp(local) {
+  const d = new Date(local)
+  if (Number.isNaN(d.getTime())) return null
+  return stamp(d)
 }
 
 const NOT_CONFIGURED = {
@@ -226,6 +251,60 @@ export function calendarServer() {
             return `${when}: ${e.summary}${e.location ? ` (${e.location})` : ''}`
           })
           return { content: [{ type: 'text', text: lines.join('\n') }] }
+        },
+      ),
+
+      tool(
+        'calendar_create_event',
+        `Create a new appointment on Phil's real David calendar. Real and
+immediate — it lands on the actual calendar the moment this returns. Only
+call it once Phil has clearly asked for something to be scheduled, with a
+title and a time he actually said, not invented. \`start\`/\`end\` are his
+own local time, no timezone suffix, e.g. "2026-09-20T14:00".`,
+        {
+          summary: z.string().describe('Event title.'),
+          start: z.string().describe('Start, local time, e.g. "2026-09-20T14:00".'),
+          end: z.string().describe('End, local time, same format. Must be after start.'),
+          location: z.string().optional().catch(undefined).describe('Optional location text.'),
+        },
+        async (args) => {
+          if (!calendarConfigured()) return NOT_CONFIGURED
+          const startStamp = localToUtcStamp(args.start)
+          const endStamp = localToUtcStamp(args.end)
+          if (!startStamp || !endStamp) {
+            return { isError: true, content: [{ type: 'text', text: 'start/end must be parseable local date-times.' }] }
+          }
+          if (endStamp <= startStamp) {
+            return { isError: true, content: [{ type: 'text', text: 'end must be after start.' }] }
+          }
+          const uid = randomUUID()
+          const ics =
+            'BEGIN:VCALENDAR\r\n' +
+            'VERSION:2.0\r\n' +
+            'PRODID:-//JARVIS//Bridge//EN\r\n' +
+            'BEGIN:VEVENT\r\n' +
+            `UID:${uid}\r\n` +
+            `DTSTAMP:${stamp(new Date())}\r\n` +
+            `DTSTART:${startStamp}\r\n` +
+            `DTEND:${endStamp}\r\n` +
+            `SUMMARY:${escapeIcsText(args.summary)}\r\n` +
+            (args.location ? `LOCATION:${escapeIcsText(args.location)}\r\n` : '') +
+            'END:VEVENT\r\n' +
+            'END:VCALENDAR\r\n'
+
+          let res
+          try {
+            res = await davRequest('PUT', `${PRINCIPAL_PATH()}jarvis-${uid}.ics`, {
+              body: ics,
+              contentType: 'text/calendar; charset=utf-8',
+            })
+          } catch (err) {
+            return { isError: true, content: [{ type: 'text', text: `Could not create event: ${err?.message ?? err}` }] }
+          }
+          if (res.status !== 201 && res.status !== 204) {
+            return { isError: true, content: [{ type: 'text', text: `Calendar server said ${res.status} creating the event.` }] }
+          }
+          return { content: [{ type: 'text', text: `Termin angelegt: ${args.summary}.` }] }
         },
       ),
     ],
