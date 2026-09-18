@@ -22,6 +22,7 @@ import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
 import { obsidianServer } from './obsidian.mjs'
+import { mailServer, mailConfigured } from './mail.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -112,6 +113,16 @@ const ALLOW_WRITES = process.env.JARVIS_ALLOW_WRITES === '1'
  * withhold it again without touching ALLOW_WRITES.
  */
 const ALLOW_BROWSER_WRITES = process.env.JARVIS_ALLOW_BROWSER_WRITES !== '0'
+
+/**
+ * Sending mail, split out the same way browser writes are — its own gate,
+ * not folded into ALLOW_WRITES. Reading the mailbox is harmless the way
+ * reading the Obsidian vault is; sending is a message that leaves the
+ * machine and can't be recalled, so unlike ALLOW_BROWSER_WRITES this
+ * defaults OFF. Set JARVIS_ALLOW_MAIL_SEND=1 once you've actually decided
+ * to let it send.
+ */
+const ALLOW_MAIL_SEND = process.env.JARVIS_ALLOW_MAIL_SEND === '1'
 
 /**
  * The orchestrator model. Override with JARVIS_MODEL to trade quality for pace
@@ -307,6 +318,17 @@ function decideTool(name) {
     // opening Bash and every other server's write tools to get it.
     if (server === 'jarvis_obsidian') return true
 
+    // The mailbox. Reading (mail_list, mail_search, mail_read) is not
+    // withheld behind ALLOW_WRITES, same reasoning as the vault above —
+    // nothing on the mail server changes. mail_send is the one tool this
+    // server exposes that does, and it answers to its own flag instead,
+    // checked here rather than deferred to the effectful-verb regex below
+    // so a "send" veto can never accidentally be satisfied by ALLOW_WRITES.
+    if (server === 'jarvis_mail') {
+      const tool = mcpToolOf(name)
+      return tool === 'mail_send' ? ALLOW_MAIL_SEND : true
+    }
+
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
       return ALLOW_WRITES
@@ -439,6 +461,16 @@ His memory — the \`obsidian_*\` tools, on his real Obsidian vault:
   topic this conversation was actually about, under a "## Session-Handoff"
   heading; if none fits, use 00 Inbox/Inbox.md. Keep it to what actually
   happened, not a transcript. Then say goodbye.
+
+His mailbox — the \`mail_*\` tools, on his real Tobit David account:
+- \`mail_list\` and \`mail_search\` before answering from memory whenever the
+  question is really "what's in my inbox" or "did X email me" — check, don't
+  guess. \`mail_read\` for the full text of one message once you have its UID.
+- \`mail_send\` actually sends, and it cannot be recalled. Only use it when
+  Phil has said out loud, this conversation, to send that message — never on
+  your own initiative, however clearly a reply seems to write itself. If the
+  recipient or subject is at all ambiguous, confirm it back to him first.
+- If mail tools report they are not configured, say so plainly and move on.
 
 Quick facts from the open web — weather, news, a score, an exchange rate,
 anything with no login and no page worth looking at: WebSearch or WebFetch,
@@ -1082,6 +1114,12 @@ console.log(
   `[jarvis] browser clicking/typing ${ALLOW_BROWSER_WRITES || ALLOW_WRITES ? 'ENABLED' : 'disabled'}` +
     (ALLOW_BROWSER_WRITES || ALLOW_WRITES ? '' : ' — set JARVIS_ALLOW_BROWSER_WRITES=1 to permit it'),
 )
+console.log(
+  mailConfigured()
+    ? `[jarvis] mail reading ready · sending ${ALLOW_MAIL_SEND ? 'ENABLED' : 'disabled'}` +
+        (ALLOW_MAIL_SEND ? '' : ' — set JARVIS_ALLOW_MAIL_SEND=1 to permit it')
+    : '[jarvis] mail not configured — set JARVIS_MAIL_HOST, JARVIS_MAIL_USER, JARVIS_MAIL_PASSWORD',
+)
 // Asynchronous, so it lands a beat after the rest of the banner. Worth printing
 // at all because an extension that is simply not running is indistinguishable
 // at the tool boundary from one that is broken, and this is the one place the
@@ -1304,6 +1342,9 @@ wss.on('connection', (socket) => {
         // obsidian_append are real disk writes to his notes, so they wait on
         // ALLOW_WRITES like everything else that changes something.
         jarvis_obsidian: obsidianServer(),
+        // Phil's Tobit David mailbox over IMAP/SMTP. mail_send answers to its
+        // own ALLOW_MAIL_SEND gate above, not ALLOW_WRITES.
+        jarvis_mail: mailServer(),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
