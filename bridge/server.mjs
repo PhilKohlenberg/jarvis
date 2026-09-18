@@ -100,6 +100,20 @@ function originAllowed(origin) {
 const ALLOW_WRITES = process.env.JARVIS_ALLOW_WRITES === '1'
 
 /**
+ * Browser clicking and typing, split out from ALLOW_WRITES on purpose.
+ *
+ * The upstream project ties chrome_click/chrome_type to the same flag as
+ * shell and file writes — see chrome.mjs, "a user who has decided to trust it
+ * turns both on together". That is a real position: the browser is signed
+ * in to mail and a bank, and clicking in it is not obviously safer than a
+ * shell command. Phil asked for browser control specifically, with Bash and
+ * file writes staying off, so this is its own gate rather than folding it
+ * into the bigger one. Defaults on; set JARVIS_ALLOW_BROWSER_WRITES=0 to
+ * withhold it again without touching ALLOW_WRITES.
+ */
+const ALLOW_BROWSER_WRITES = process.env.JARVIS_ALLOW_BROWSER_WRITES !== '0'
+
+/**
  * The orchestrator model. Override with JARVIS_MODEL to trade quality for pace
  * — claude-sonnet-5 is noticeably snappier on camera if Opus feels slow.
  */
@@ -1043,6 +1057,10 @@ console.log(
   `[jarvis] writes ${ALLOW_WRITES ? 'ENABLED' : 'disabled'}` +
     (ALLOW_WRITES ? '' : ' — set JARVIS_ALLOW_WRITES=1 to permit shell/file/device actions'),
 )
+console.log(
+  `[jarvis] browser clicking/typing ${ALLOW_BROWSER_WRITES || ALLOW_WRITES ? 'ENABLED' : 'disabled'}` +
+    (ALLOW_BROWSER_WRITES || ALLOW_WRITES ? '' : ' — set JARVIS_ALLOW_BROWSER_WRITES=1 to permit it'),
+)
 // Asynchronous, so it lands a beat after the rest of the banner. Worth printing
 // at all because an extension that is simply not running is indistinguishable
 // at the tool boundary from one that is broken, and this is the one place the
@@ -1050,7 +1068,7 @@ console.log(
 void chromeAvailable().then((ok) => {
   console.log(
     ok
-      ? `[jarvis] browser control ready${ALLOW_WRITES ? '' : ' (reading only — clicking and typing need JARVIS_ALLOW_WRITES=1)'}`
+      ? `[jarvis] browser control ready${ALLOW_WRITES || ALLOW_BROWSER_WRITES ? '' : ' (reading only — clicking and typing need JARVIS_ALLOW_BROWSER_WRITES=1)'}`
       : '[jarvis] browser control unavailable — open Chrome with the Claude extension enabled',
   )
 })
@@ -1245,7 +1263,7 @@ wss.on('connection', (socket) => {
         // The user's own Chrome, over the extension's native-host socket. It
         // holds no per-connection state, but it is built here with the rest so
         // the write gate is read once, at the same point as everything else.
-        jarvis_chrome: chromeServer({ allowWrites: ALLOW_WRITES }),
+        jarvis_chrome: chromeServer({ allowWrites: ALLOW_WRITES || ALLOW_BROWSER_WRITES }),
         // The camera, which unlike everything else here has to ask and wait.
         jarvis_eyes: visionServer(ask),
         // Phil's Obsidian vault. Reading is always on; obsidian_write and
