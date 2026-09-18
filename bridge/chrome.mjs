@@ -52,8 +52,15 @@ import { join } from 'node:path'
  * `userInfo().username` rather than $USER, which is unset under launchd — and a
  * bridge started from a login item is exactly the case where a wrong guess
  * would look like the extension being uninstalled.
+ *
+ * Windows has no /tmp and no per-pid socket files: the native host exposes one
+ * fixed named pipe instead, `\\.\pipe\<same base name>`, discoverable with
+ * `Get-ChildItem \\.\pipe\`. So on win32 this is the connection path directly,
+ * not a directory to scan — see the platform branch in findSocket below.
  */
-const SOCKET_DIR = `/tmp/claude-mcp-browser-bridge-${userInfo().username}`
+const SOCKET_BASENAME = `claude-mcp-browser-bridge-${userInfo().username}`
+const SOCKET_DIR = `/tmp/${SOCKET_BASENAME}`
+const WINDOWS_PIPE_PATH = `\\\\.\\pipe\\${SOCKET_BASENAME}`
 
 /**
  * How long a single browser action may take.
@@ -82,6 +89,13 @@ const CONNECT_TIMEOUT_MS = 3_000
  * accepted as a last resort, because on some setups it is all there is.
  */
 async function findSocket() {
+  // Windows: one well-known named pipe, not a directory of dated .sock files.
+  // net.createConnection accepts a \\.\pipe\ path the same way it accepts a
+  // Unix socket path, so the rest of ChromeLink needs no platform branch —
+  // only discovery does. There is nothing to stat; a pipe that doesn't exist
+  // yet simply fails to connect, which ensureConnected already reports.
+  if (process.platform === 'win32') return WINDOWS_PIPE_PATH
+
   let names
   try {
     names = await readdir(SOCKET_DIR)

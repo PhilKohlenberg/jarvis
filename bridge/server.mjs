@@ -21,6 +21,7 @@ import { displayServer } from './panels.mjs'
 import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
+import { obsidianServer } from './obsidian.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -102,7 +103,7 @@ const ALLOW_WRITES = process.env.JARVIS_ALLOW_WRITES === '1'
  * The orchestrator model. Override with JARVIS_MODEL to trade quality for pace
  * — claude-sonnet-5 is noticeably snappier on camera if Opus feels slow.
  */
-const MODEL = process.env.JARVIS_MODEL ?? 'claude-opus-5'
+const MODEL = process.env.JARVIS_MODEL ?? 'claude-sonnet-5'
 
 /**
  * How hard the model thinks before answering.
@@ -119,7 +120,7 @@ const MODEL = process.env.JARVIS_MODEL ?? 'claude-opus-5'
  * matters more than pace; drop back to 'low' when filming and every second of
  * dead air shows.
  */
-const EFFORT = process.env.JARVIS_EFFORT ?? 'high'
+const EFFORT = process.env.JARVIS_EFFORT ?? 'medium'
 
 /**
  * Both spellings of every renamed built-in are listed on purpose. The SDK
@@ -279,6 +280,15 @@ function decideTool(name) {
     // indicator the user can see for as long as it is live.
     if (server === 'jarvis_eyes') return true
 
+    // The Obsidian vault. Not withheld behind ALLOW_WRITES, unlike the rest of
+    // this list — that flag means "can change anything on this machine", and
+    // obsidian.mjs's own resolveInVault() already confines every read and
+    // write to one folder before a path is touched. A note saved there is a
+    // much smaller thing to get wrong than a shell command, so the persona's
+    // one real request — remember what Phil tells it — does not also require
+    // opening Bash and every other server's write tools to get it.
+    if (server === 'jarvis_obsidian') return true
+
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
       return ALLOW_WRITES
@@ -390,6 +400,20 @@ The interface itself:
   subject moves on.
 - Put it back. A colour that outlives the moment that earned it is a fault.
 - Never mention that you have done any of it. They are looking at the screen.
+
+His memory — the \`obsidian_*\` tools, on his real Obsidian vault:
+- \`obsidian_search\` and \`obsidian_read\` before answering from memory whenever
+  the question is really "what do I already know about this" or "where did we
+  leave this". Check the vault; do not guess.
+- \`obsidian_write\` and \`obsidian_append\` save what he tells you, unasked, when
+  it is worth keeping: a real decision, a task with a goal, a fact to remember.
+  Not small talk, not a control phrase like "weiter" or "ja".
+- The vault follows PARA: 01 Projekte (goal and deadline), 02 Bereiche (ongoing
+  area), 03 Ressourcen (reference), 04 Archiv (done), 00 Inbox for anything that
+  fits nowhere else. \`obsidian_list\` first if you are not sure a note already
+  exists, so you extend it with obsidian_append rather than making a duplicate.
+- Say in one short sentence what you saved and where. Never narrate the
+  mechanics — no "let me write that down", just the fact afterward.
 
 Their browser — ALWAYS the \`chrome_*\` tools, first, for anything to do with a
 browser or a web page:
@@ -1224,6 +1248,10 @@ wss.on('connection', (socket) => {
         jarvis_chrome: chromeServer({ allowWrites: ALLOW_WRITES }),
         // The camera, which unlike everything else here has to ask and wait.
         jarvis_eyes: visionServer(ask),
+        // Phil's Obsidian vault. Reading is always on; obsidian_write and
+        // obsidian_append are real disk writes to his notes, so they wait on
+        // ALLOW_WRITES like everything else that changes something.
+        jarvis_obsidian: obsidianServer(),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
