@@ -343,8 +343,8 @@ export default function App() {
         .getState()
         .setError(
           err instanceof Error
-            ? `Power-up failed: ${err.message}`
-            : 'Power-up failed. Click to try again.',
+            ? `Start fehlgeschlagen: ${err.message}`
+            : 'Start fehlgeschlagen. Zum erneuten Versuch klicken.',
         )
     }
   }

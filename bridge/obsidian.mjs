@@ -137,8 +137,16 @@ export function obsidianServer() {
           query: z.string().describe('Text to search for, case-insensitive.'),
         },
         async (args) => {
-          const needle = String(args.query ?? '').toLowerCase()
-          if (!needle) {
+          // Fuzzy in the one sense that actually helps a spoken query: word
+          // order and exact phrasing don't matter, so "JARVIS Push-to-talk"
+          // finds a line that says "Push-to-talk bei JARVIS" too. Each query
+          // word still has to appear whole — this is not typo-tolerant, just
+          // not phrase-exact.
+          const words = String(args.query ?? '')
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean)
+          if (!words.length) {
             return { isError: true, content: [{ type: 'text', text: 'Empty query.' }] }
           }
           const files = []
@@ -151,10 +159,14 @@ export function obsidianServer() {
             } catch {
               continue
             }
-            const lineIdx = text.split('\n').findIndex((l) => l.toLowerCase().includes(needle))
+            const lines = text.split('\n')
+            const lineIdx = lines.findIndex((l) => {
+              const lower = l.toLowerCase()
+              return words.every((w) => lower.includes(w))
+            })
             if (lineIdx === -1) continue
             const rel = relative(VAULT, full).replace(/\\/g, '/')
-            const line = text.split('\n')[lineIdx].trim().slice(0, 160)
+            const line = lines[lineIdx].trim().slice(0, 160)
             hits.push(`${rel}: ${line}`)
             if (hits.length >= 25) break
           }

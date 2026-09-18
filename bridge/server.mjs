@@ -250,6 +250,10 @@ const READ_VERB =
 const EFFECTFUL_VERB =
   /(send|call|post|create|delete|remove|update|edit|write|install|launch|tap|swipe|press|type|buy|pay|charge|publish|deploy|outbound|download)/i
 
+/** Tools that spend real money per call on a connected account, capped in
+ *  canUseTool below regardless of the read/write policy above. */
+const GENERATION_TOOL = /generate_(image|video|audio|speech)|text_to_speech/i
+
 /**
  * Tools whose names trip the veto without deserving it.
  *
@@ -428,6 +432,18 @@ His memory — the \`obsidian_*\` tools, on his real Obsidian vault:
   exists, so you extend it with obsidian_append rather than making a duplicate.
 - Say in one short sentence what you saved and where. Never narrate the
   mechanics — no "let me write that down", just the fact afterward.
+- When Phil signals he is done — "das war's", "ich mach Schluss", "bis
+  morgen", "Pause", or similar — write a short handoff before saying goodbye,
+  without being asked: what happened this conversation, where it stands, and
+  what to pick up next time. obsidian_append it to the note of the project or
+  topic this conversation was actually about, under a "## Session-Handoff"
+  heading; if none fits, use 00 Inbox/Inbox.md. Keep it to what actually
+  happened, not a transcript. Then say goodbye.
+
+Quick facts from the open web — weather, news, a score, an exchange rate,
+anything with no login and no page worth looking at: WebSearch or WebFetch,
+not the browser. Reach for \`chrome_*\` only when the answer needs a login, a
+live page, or something visual to show — a plain fact does not.
 
 Their browser — ALWAYS the \`chrome_*\` tools, first, for anything to do with a
 browser or a web page:
@@ -1108,6 +1124,19 @@ wss.on('connection', (socket) => {
   /** Resolves the pending user message into the SDK's input generator. */
   let deliver = null
   let closed = false
+
+  /**
+   * A cap on image/video/audio generation for this connection.
+   *
+   * These run unconditionally (see READ_ONLY_MCP) because generating a file
+   * changes nothing on the machine — but it does spend real money on a
+   * connected account, on every call, with nothing that would stop a
+   * confused or looping turn from doing it a dozen times before anyone
+   * notices. This is not a safety gate the way the browser guard is; it is a
+   * budget, reset for every new voice session (a fresh WebSocket connection).
+   */
+  let generationCount = 0
+  const GENERATION_LIMIT = 8
   const inbox = []
 
   async function* userMessages() {
@@ -1323,6 +1352,19 @@ wss.on('connection', (socket) => {
       // something with a consequence, like a `touch`. So a deny here is
       // reliable; an absence of a call here is not proof nothing ran.
       canUseTool: async (toolName) => {
+        if (GENERATION_TOOL.test(mcpToolOf(toolName))) {
+          generationCount += 1
+          if (generationCount > GENERATION_LIMIT) {
+            console.log(`[jarvis] tool ${toolName} -> deny (generation cap)`)
+            return {
+              behavior: 'deny',
+              message:
+                `Blocked: this session has already generated ${GENERATION_LIMIT} ` +
+                'images, videos or audio clips. Tell the user the budget for this ' +
+                'conversation is used up and they can start a new one to continue.',
+            }
+          }
+        }
         const ok = decideTool(toolName)
         console.log(`[jarvis] tool ${toolName} -> ${ok ? 'allow' : 'deny'}`)
         return ok

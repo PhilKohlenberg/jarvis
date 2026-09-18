@@ -836,11 +836,29 @@ export function chromeServer({ allowWrites }) {
           tabId,
         },
         async (args) => {
+          const tabId = await resolveTab(args.tabId)
           if (args.ref) {
-            const tabId = await resolveTab(args.tabId)
             const label = labelFor(tabId, args.ref)
             if (label && BLOCKED_ACTION_LABEL.test(label)) {
               return refusal(label, 'a purchase, payment, or other one-way action')
+            }
+          } else if (refLabels.has(tabId)) {
+            // A coordinate click with no ref cannot be checked against the
+            // guard above — that is exactly how a page once read would be
+            // clicked blind past it. Once the page has been read at all, a
+            // ref is mandatory; the coordinate fallback stays only for a page
+            // read_page returned nothing useful for.
+            return {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    'Refused: this page has already been read, so a ref is required — ' +
+                    'call chrome_read_page or chrome_find and click by ref instead of a ' +
+                    'raw coordinate.',
+                },
+              ],
             }
           }
           return forward('computer')({ action: 'left_click', ...args })
