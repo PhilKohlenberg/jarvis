@@ -299,10 +299,17 @@ export async function startVad(h: VadHandlers): Promise<Vad> {
       // which muted it starts out believing the microphone is already open.
       for (const t of stream.getAudioTracks()) t.enabled = !on
       if (on && changed) {
-        // A segment caught mid-word belongs to a turn that is now over.
-        discardRecorder()
-        speaking = false
-        speechStartedAt = 0
+        if (speaking) {
+          // Confirmed speech, cut short by the mic being switched off — this
+          // is the push-to-talk button clicked off mid-sentence. Finish the
+          // segment rather than throwing it away, so whatever was said before
+          // the click still reaches the transcriber and gets an answer.
+          endSegment()
+        } else {
+          // Not yet confirmed as speech — an armed-but-unconfirmed blip, or
+          // silence. Nothing here was ever a word.
+          discardRecorder()
+        }
         armedAt = 0
       }
     },

@@ -576,11 +576,16 @@ async function startElevenVoice(h: VoiceHandlers): Promise<Voice> {
     vad?.setMuted(mode === 'deaf')
     diag.muted = mode === 'deaf'
     diag.track = micTrackEnabled()
-    // He has stood down — by Escape, by the idle timeout, or by dropping back
-    // to the wake word. Anything half-said belonged to a conversation that is
-    // over, and letting the hold expire later would open the next one with a
-    // fragment of the last.
-    if ((mode === 'wake' || mode === 'deaf') && assemble.held()) assemble.cancel()
+    // He has stood down — by Escape, by the idle timeout, or by the mic being
+    // switched off. Mode 'wake' is a genuine stand-down (unreachable in the
+    // push-to-talk build today, kept for the wake-word one): whatever was
+    // half-said belonged to a conversation that is over, so it's dropped.
+    // Mode 'deaf' is different here — it is also what a manual mic-off click
+    // produces, and something already transcribed and merely waiting out its
+    // hold window (see holdFor) was genuinely said. Send it rather than
+    // discard it: turning the mic off should not cost the answer.
+    if (mode === 'wake' && assemble.held()) assemble.cancel()
+    else if (mode === 'deaf' && assemble.held()) assemble.flush()
   }, 200)
 
   return {
