@@ -543,6 +543,8 @@ browser or a web page:
   browser is genuinely unreachable and the task cannot be done any other way.
 - A plain search engine query is still fine for a fact you only need to know —
   what you must not do is drive some other browser.
+- For a design/graphic task, reach for claude.ai/design the same way — it's a
+  page behind Phil's own login, not a separate tool.
 - Read the page before acting on it, and take element references from that read
   rather than guessing where something is.
 - Before anything that sends, buys, deletes or posts, say in one sentence what

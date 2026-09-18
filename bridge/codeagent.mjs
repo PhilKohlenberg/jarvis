@@ -1,7 +1,8 @@
 import { createSdkMcpServer, tool, query } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
-import { existsSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, statSync, realpathSync } from 'node:fs'
+import { resolve, relative, isAbsolute } from 'node:path'
+import { homedir } from 'node:os'
 
 /**
  * JARVIS's hands on real code: a fresh, independent Claude Code session,
@@ -28,6 +29,31 @@ import { resolve } from 'node:path'
 
 const MODEL = process.env.JARVIS_CODE_MODEL ?? 'claude-sonnet-5'
 const MAX_TURNS = 60
+
+/**
+ * Where a task is allowed to run. Home directory by default, same reasoning
+ * as FILE_ROOTS in server.mjs — a voice command naming a path should not be
+ * able to point a full Bash/Edit/Write session at C:\Windows or someone
+ * else's profile. JARVIS_CODE_ROOTS adds more, comma separated, for a
+ * project that genuinely lives elsewhere (an external drive, say).
+ */
+const CODE_ROOTS = [
+  homedir(),
+  ...(process.env.JARVIS_CODE_ROOTS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+].map((root) => {
+  try {
+    return realpathSync(root)
+  } catch {
+    return resolve(root)
+  }
+})
+
+function withinRoots(real) {
+  return CODE_ROOTS.some((root) => {
+    const rel = relative(root, real)
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  })
+}
 
 const RUN_DESCRIPTION = `Hand off a coding task to a real, independent Claude Code
 session running in one project directory, with full shell and file access
@@ -64,11 +90,18 @@ export function codeAgentServer() {
           if (!existsSync(dir) || !statSync(dir).isDirectory()) {
             return { isError: true, content: [{ type: 'text', text: `Not a real directory: ${dir}` }] }
           }
+          const real = realpathSync(dir)
+          if (!withinRoots(real)) {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `${dir} is outside the allowed project roots. Set JARVIS_CODE_ROOTS to add it.` }],
+            }
+          }
           try {
             const session = query({
               prompt: String(args.task ?? ''),
               options: {
-                cwd: dir,
+                cwd: real,
                 model: MODEL,
                 maxTurns: MAX_TURNS,
                 // Phil's own machine, the same trust level running `claude`
