@@ -151,6 +151,26 @@ async function smtpSend({ to, subject, body }) {
   }
 }
 
+async function saveDraft({ to, subject, body }) {
+  assertNoCrlf(to, 'Recipient')
+  if (!EMAIL_RE.test(to)) throw new Error(`Not a plain email address: ${to}`)
+  assertNoCrlf(subject, 'Subject')
+
+  const message =
+    `From: ${USER}\r\nTo: ${to}\r\nSubject: ${subject}\r\n` +
+    `Date: ${new Date().toUTCString()}\r\nMessage-ID: <${randomUUID()}@jarvis.local>\r\n` +
+    `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n` +
+    body.replace(/\r\n|\r|\n/g, '\r\n')
+
+  const client = imapClient()
+  try {
+    await client.connect()
+    await client.append(DRAFTS_FOLDER, message, ['\\Draft'])
+  } finally {
+    await client.logout().catch(() => {})
+  }
+}
+
 const NOT_CONFIGURED = {
   isError: true,
   content: [
@@ -184,6 +204,15 @@ looking for something specific rather than browsing what's recent.`
 
 const READ_DESCRIPTION = `Read one message in full by its UID (from mail_list or
 mail_search): sender, subject, date and the plain-text body. Marks it read.`
+
+const DRAFTS_FOLDER = 'System/Entwürfe'
+
+const DRAFT_DESCRIPTION = `Save an email as a draft in Phil's own mailbox
+(${DRAFTS_FOLDER}) instead of sending it — he reviews and sends it himself from
+his own mail client. Prefer this whenever Phil wants a message written but
+hasn't clearly said to send it right now, or when the recipient is outside the
+server's own domain (external send is currently refused by the mail server
+itself — see mail_send's own error if that comes up).`
 
 const SEND_DESCRIPTION = `Send an email from Phil's own mailbox. Real, irreversible
 — it leaves the machine the moment this returns, and there is no undo.
@@ -340,6 +369,25 @@ export function mailServer() {
             return { content: [{ type: 'text', text: `Sent to ${args.to}.` }] }
           } catch (err) {
             return errorResult('Send failed', err)
+          }
+        },
+      ),
+
+      tool(
+        'mail_draft',
+        DRAFT_DESCRIPTION,
+        {
+          to: z.string().describe('Recipient email address.'),
+          subject: z.string().describe('Subject line.'),
+          body: z.string().describe('Plain-text body.'),
+        },
+        async (args) => {
+          if (!mailConfigured()) return NOT_CONFIGURED
+          try {
+            await saveDraft({ to: args.to, subject: args.subject, body: args.body })
+            return { content: [{ type: 'text', text: `Saved as a draft to ${args.to} — review and send it yourself.` }] }
+          } catch (err) {
+            return errorResult('Could not save draft', err)
           }
         },
       ),

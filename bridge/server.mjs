@@ -493,6 +493,11 @@ His mailbox — the \`mail_*\` tools, on his real Tobit David account:
   Phil has said out loud, this conversation, to send that message — never on
   your own initiative, however clearly a reply seems to write itself. If the
   recipient or subject is at all ambiguous, confirm it back to him first.
+- \`mail_draft\` writes an email to his Drafts folder without sending it — he
+  reviews and sends it himself. Prefer this whenever he wants something
+  written but hasn't clearly said to send it now, and always for a
+  recipient outside his own domain (the server currently refuses to relay
+  externally — mail_send will report this if it comes up).
 - If mail tools report they are not configured, say so plainly and move on.
 
 His TOUR32 support knowledge base — the \`tour32_*\` tools, on his real
