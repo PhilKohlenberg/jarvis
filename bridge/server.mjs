@@ -417,7 +417,9 @@ NEVER.
 WIT. Dry, and delivered in exactly the same register as a status report. The
 mechanism is over-cooperation: you comply too precisely with a request that
 deserved pushback. Never signal the joke, never acknowledge it landed, never
-call one back.
+call one back. Reach for it every few exchanges, not every turn — a dry line
+dropped once in a while lands; one in every answer reads as a bit doing
+itself. Never on bad news, never on something that actually matters to him.
 
 BUTLER REGISTER, not corporate assistant. "Soll ich" over "Möchten Sie, dass
 ich". "Sehr wohl, Sir" meaning understood. "Ich fürchte" as the bad-news
@@ -1164,18 +1166,75 @@ function broadcast(msg) {
   }
 }
 
+/**
+ * Does this look like a support case worth auto-triaging, rather than a
+ * newsletter or an ordinary reply? A cheap keyword check, not a model call —
+ * the point is to skip spending an agent turn on the mail that clearly isn't
+ * a problem report, not to classify perfectly.
+ */
+const SUPPORT_CASE_RE =
+  /fehler|problem|klappt nicht|geht nicht|funktioniert nicht|abgelehnt|fehlgeschlagen|error|bug|hilfe|dringend/i
+
+/**
+ * Auto-triage: search Phil's own TOUR32 knowledge base for a matching case
+ * before he's even opened the mail. Read-only (jarvis_tour32's search/read
+ * tools only, no append) and capped short — this runs unattended the moment
+ * mail arrives, with nobody watching a turn budget the way a voice
+ * conversation would.
+ */
+async function triageSupportMail({ from, subject, body }) {
+  const session = query({
+    prompt:
+      `Neue Support-Mail.\nVon: ${from}\nBetreff: ${subject}\n\n${body}\n\n` +
+      'Durchsuche die TOUR32-Wissensbasis (tour32_search/tour32_read) nach einer ' +
+      'passenden Lösung für dieses Problem. Antworte in maximal zwei kurzen, ' +
+      'gesprochenen Sätzen auf Deutsch: ob eine passende Lösung gefunden wurde, ' +
+      'und wenn ja, welche — knapp genug zum Vorlesen, keine Liste, keine Quellenangaben.',
+    options: {
+      mcpServers: { jarvis_tour32: tour32Server() },
+      systemPrompt: 'Du durchsuchst eine Support-Wissensbasis und fasst das Ergebnis in ein bis zwei kurzen, sprechbaren Sätzen zusammen.',
+      model: MODEL,
+      effort: 'low',
+      maxTurns: 8,
+      settingSources: [],
+    },
+  })
+  for await (const msg of session) {
+    if (msg.type === 'result') {
+      return msg.subtype === 'success' ? (msg.result ?? '').trim() : ''
+    }
+  }
+  return ''
+}
+
 // A live watch on the inbox, running for the life of the bridge process
 // rather than per connection — see mailwatch.mjs. Only started once mail is
 // actually configured, and once, not per WebSocket connection.
 if (mailConfigured()) {
   watchInbox({
     ...mailCreds(),
-    onNewMail: ({ from, subject }) => {
+    onNewMail: ({ from, subject, body }) => {
       console.log(`[jarvis] new mail from ${from}: ${subject}`)
-      broadcast({ type: 'notify', text: `Neue E-Mail von ${from}, Betreff: ${subject}` })
+      const looksLikeCase = SUPPORT_CASE_RE.test(`${subject} ${body}`)
+      if (!looksLikeCase) {
+        broadcast({ type: 'notify', text: `Neue E-Mail von ${from}, Betreff: ${subject}` })
+        return
+      }
+      broadcast({ type: 'notify', text: `Neue Support-Mail von ${from}, Betreff: ${subject}. Ich durchsuche die Wissensbasis.` })
+      triageSupportMail({ from, subject, body: body ?? '' })
+        .then((answer) => {
+          broadcast({
+            type: 'notify',
+            text: answer || `Zu "${subject}" habe ich in der Wissensbasis nichts Passendes gefunden.`,
+          })
+        })
+        .catch((err) => {
+          console.error('[jarvis] triage failed:', err?.message ?? err)
+          broadcast({ type: 'notify', text: `Die automatische Suche zu "${subject}" ist fehlgeschlagen.` })
+        })
     },
   })
-  console.log('[jarvis] watching inbox for new mail')
+  console.log('[jarvis] watching inbox for new mail, auto-triaging support cases')
 }
 
 console.log(`[jarvis] bridge listening on ws://localhost:${PORT}`)
