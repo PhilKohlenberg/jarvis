@@ -100,7 +100,23 @@ function stuffDots(text) {
   return text.replace(/\r\n|\r|\n/g, '\r\n').replace(/^\./gm, '..')
 }
 
+// `to` and `subject` land directly in SMTP command lines and message
+// headers, not just the body — a CRLF in either would inject a second SMTP
+// command (e.g. a second RCPT TO, adding a hidden recipient) or a forged
+// header (e.g. Bcc). Both are attacker-reachable indirectly: `to`/`subject`
+// are whatever the model passes, and the model may be summarizing an email
+// it just read that was crafted to make it do exactly that.
+const EMAIL_RE = /^[^\s<>()[\]:;,"\\@]+@[^\s<>()[\]:;,"\\@]+\.[^\s<>()[\]:;,"\\@]+$/
+
+function assertNoCrlf(value, label) {
+  if (/[\r\n\0]/.test(value)) throw new Error(`${label} must not contain line breaks.`)
+}
+
 async function smtpSend({ to, subject, body }) {
+  assertNoCrlf(to, 'Recipient')
+  if (!EMAIL_RE.test(to)) throw new Error(`Not a plain email address: ${to}`)
+  assertNoCrlf(subject, 'Subject')
+
   let sock = netConnect({ host: HOST, port: SMTP_PORT })
   const TIMEOUT_MS = 15_000
   sock.setTimeout(TIMEOUT_MS, () => sock.destroy(new Error('SMTP connection timed out')))

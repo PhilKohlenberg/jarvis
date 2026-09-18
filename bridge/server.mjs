@@ -24,6 +24,7 @@ import { visionServer } from './vision.mjs'
 import { obsidianServer } from './obsidian.mjs'
 import { mailServer, mailConfigured } from './mail.mjs'
 import { tour32Server } from './tour32.mjs'
+import { codeAgentServer } from './codeagent.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -344,6 +345,13 @@ function decideTool(name) {
     // ALLOW_MAIL_SEND above for why that's the switch and not a restart.
     if (server === 'jarvis_tour32') return true
 
+    // A real Claude Code session with full Bash/Edit/Write in a project
+    // directory — the biggest hammer this bridge has. Answers to
+    // ALLOW_WRITES itself, the same hard switch already gating raw Bash and
+    // file writes, not the lighter voice-gated pattern mail_send and
+    // tour32_append_case use — see codeagent.mjs for why.
+    if (server === 'jarvis_code') return ALLOW_WRITES
+
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
       return ALLOW_WRITES
@@ -495,6 +503,16 @@ support-case folder:
   case log. Only call it when Phil has said out loud, this conversation, to
   record it — and follow the file's own schema, which \`tour32_read\` on
   Wissensbasis_TOUR32.md shows you if you haven't seen it this session.
+
+A real coding agent — \`code_run_task\`, one project directory at a time:
+- Only reach for it once Phil has clearly asked for code to be written,
+  fixed or changed in a specific project. Say what you're about to do and
+  where before you start — it can run for minutes and changes real files.
+- The task you pass it is that session's ENTIRE brief; it has no memory of
+  this conversation. Restate what to do, which project, and anything Phil
+  said that matters, the way you'd brief a colleague who just arrived.
+- If it's disabled, say plainly that write access needs enabling on the
+  machine — same as any other blocked write tool.
 
 Quick facts from the open web — weather, news, a score, an exchange rate,
 anything with no login and no page worth looking at: WebSearch or WebFetch,
@@ -1372,6 +1390,9 @@ wss.on('connection', (socket) => {
         // Phil's TOUR32 support knowledge base — read/search always on,
         // tour32_append_case answers to the same voice-gate as mail_send.
         jarvis_tour32: tour32Server(),
+        // A real coding agent per task — answers to ALLOW_WRITES itself,
+        // see decideTool above.
+        jarvis_code: codeAgentServer(),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
