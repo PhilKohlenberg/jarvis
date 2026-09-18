@@ -34,10 +34,11 @@ const LOG = [
 
 type Stage = 'bar' | 'rings' | 'suit' | 'reactor'
 
-export function Boot() {
+export function Boot({ onSkip, onMute }: { onSkip: () => void; onMute: () => void }) {
   const phase = useStore((s) => s.phase)
   const reduced = useReducedMotion()
   const [t, setT] = useState(0)
+  const [muted, setMuted] = useState(false)
 
   // A single clock: elapsed milliseconds since the boot phase began. Every
   // stage reads from it, so nothing can drift out of step with anything else.
@@ -105,6 +106,25 @@ export function Boot() {
           {stage === 'rings' && <Rings reduced={!!reduced} />}
           {stage === 'suit' && <Suit reduced={!!reduced} />}
           {stage === 'reactor' && <Reactor reduced={!!reduced} t={t - T.reactor} />}
+        </div>
+
+        {/* ---- controls: this plays every time JARVIS starts, so an escape
+             hatch matters more here than anywhere else in the interface ---- */}
+        <div className="boot-controls">
+          <button type="button" className="boot-btn" onClick={onSkip}>
+            Überspringen
+          </button>
+          <button
+            type="button"
+            className="boot-btn"
+            disabled={muted}
+            onClick={() => {
+              onMute()
+              setMuted(true)
+            }}
+          >
+            {muted ? 'Stumm' : 'Stummschalten'}
+          </button>
         </div>
       </motion.div>
     </AnimatePresence>

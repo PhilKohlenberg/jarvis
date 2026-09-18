@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Scene } from './scene/Scene'
 import { Hud } from './ui/Hud'
 import { Boot } from './ui/Boot'
+import { TextInput } from './ui/TextInput'
 import { Ignition } from './ui/Ignition'
 import { Diagnostics } from './ui/Diagnostics'
 import { useStore } from './store'
@@ -85,6 +86,12 @@ export default function App() {
   const booting = useRef(false)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const voicePoll = useRef<ReturnType<typeof setInterval> | null>(null)
+  /** Resolves the boot-sequence wait early — set while it's in flight, so the
+   *  skip button in Boot.tsx has something to call. Null the rest of the time. */
+  const bootResolve = useRef<(() => void) | null>(null)
+  /** The typed-message box. He still only ever answers by speaking — this is
+   *  an alternate way in, not a text mode. */
+  const [typing, setTyping] = useState(false)
 
   // -- helpers --------------------------------------------------------------
 
@@ -315,8 +322,40 @@ export default function App() {
     store.getState().setCaption(text)
   }
 
+  /** A typed message. Goes straight to respond() — no wake word or name to
+   *  strip, since typing it was already the deliberate act speaking it once
+   *  was. The answer still only ever comes back as speech. */
+  const onTyped = (text: string) => {
+    setTyping(false)
+    const said = text.trim()
+    if (!said) return
+    const phase = store.getState().phase
+    if (phase === 'offline' || phase === 'boot') return
+    void respond(said)
+  }
+
   const onVoiceError = (message: string) => {
     store.getState().setError(message)
+  }
+
+  // -- boot controls ---------------------------------------------------------
+
+  /** Skip button in Boot.tsx: end the wait now instead of at 9.2s, and take
+   *  the score with it — the visual sequence jumping straight to the live
+   *  interface while the boot music kept playing over it was the whole thing
+   *  half-skipped. */
+  const skipBoot = () => {
+    music.stopAll()
+    bootResolve.current?.()
+  }
+
+  /** Mute button in Boot.tsx: silence the score, keep the visual sequence
+   *  playing. Only music.stopAll() — sfx.setVolume is the persistent volume
+   *  for every future cue (clicks, ticks, chimes), not a boot-scoped one, and
+   *  the short one-shot boot blip from sfx.play('boot') has already finished
+   *  playing by the time this is clickable. */
+  const muteBoot = () => {
+    music.stopAll()
   }
 
   // -- power on -------------------------------------------------------------
@@ -493,8 +532,16 @@ export default function App() {
     // Long enough for the four-beat start-up sequence in Boot.tsx to play —
     // status bar, rings, suit schematic, reactor power-up — before the live
     // interface takes over. Kept a touch under the boot cue so the music is
-    // still rising as the reactor lands.
-    await new Promise((r) => setTimeout(r, 9200)) // boot sequence
+    // still rising as the reactor lands. Cut short if the skip button in
+    // Boot.tsx fires — bootResolve is how it reaches into this closure.
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        bootResolve.current = null
+        resolve()
+      }
+      bootResolve.current = done
+      setTimeout(done, 9200)
+    })
     await warming
     store.getState().setConnected(connectedLabels())
     store.getState().setVoice(currentVoiceName())
@@ -654,6 +701,17 @@ export default function App() {
         return
       }
 
+      // C opens the typed-message box — a way in for a question that
+      // shouldn't be said out loud, or a room too noisy to be heard in.
+      // He still only ever answers by speaking.
+      if (e.key === 'c' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const phase = store.getState().phase
+        if (phase === 'offline' || phase === 'boot') return
+        e.preventDefault()
+        setTyping(true)
+        return
+      }
+
       // Escape stands the whole thing down — the one thing the old build had
       // no key for at all.
       if (e.key === 'Escape') {
@@ -713,7 +771,8 @@ export default function App() {
     <>
       <Scene />
       <Hud />
-      <Boot />
+      <Boot onSkip={skipBoot} onMute={muteBoot} />
+      <TextInput open={typing} onSubmit={onTyped} onClose={() => setTyping(false)} />
       <Diagnostics />
       <Ignition onStart={() => void powerOn()} />
     </>
