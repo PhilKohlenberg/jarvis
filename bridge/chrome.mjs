@@ -382,6 +382,74 @@ function clean(content) {
  */
 let activeTab = null
 
+// ---------------------------------------------------------------------------
+// A hard stop on the actions a voice can't be trusted to authorise: buying,
+// paying, sending, and entering credentials.
+//
+// The tool descriptions already ask the model to narrate before anything
+// irreversible, but that is instruction, not enforcement — a misheard word or
+// an over-eager turn can still reach chrome_click on a live checkout page. So
+// this is a second, independent layer that does not trust the model's own
+// judgment: it reads the same accessible name the model sees for a ref and
+// refuses to act on it if that name matches what a purchase, a send, or a
+// credential field looks like, in German or English. It cannot be argued with
+// from inside a turn, because the refusal happens before the click is even
+// sent to the browser.
+//
+// The gap this leaves is coordinate-only clicks: chrome_click accepts a raw
+// [x, y] as a fallback for when no ref exists, and a label that was never read
+// cannot be checked. That path stays open because removing it would break
+// clicking on pages read_page cannot parse at all. What narrows the gap is
+// chrome_click's own instruction to prefer a ref, and the fact that a blind
+// coordinate click on an unread page has no idea what it is pressing either
+// way — this guard covers the case that actually matters, which is the model
+// knowingly reading "Jetzt kaufen" and clicking it anyway.
+// ---------------------------------------------------------------------------
+
+/** ref_N -> the accessible name read_page or find last reported for it, per tab. */
+const refLabels = new Map()
+
+/** Extract every `"label" [ref_N]` pair out of a read_page/find text reply. */
+function rememberLabels(tabId, result) {
+  if (!result || result.isError || !Array.isArray(result.content)) return
+  const text = result.content
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n')
+  const seen = refLabels.get(tabId) ?? new Map()
+  for (const m of text.matchAll(/"([^"]*)"\s*\[ref_(\d+)\]/g)) {
+    seen.set(`ref_${m[2]}`, m[1])
+  }
+  refLabels.set(tabId, seen)
+}
+
+/** English + German: buying, paying, sending, and other one-way actions. */
+const BLOCKED_ACTION_LABEL =
+  /(buy( it)? now|add to cart|place order|checkout|check out|proceed to payment|pay now|confirm (order|purchase|payment)|complete (order|purchase)|subscribe|donate|send money|transfer funds|delete account|jetzt kaufen|kaufen|in den warenkorb|zur kasse|bestellen|bestellung (abschicken|aufgeben)|kostenpflichtig bestellen|jetzt bezahlen|bezahlen|zahlung (bestätigen|abschließen)|überweis(en|ung)|spenden|abonnieren|konto löschen|senden|nachricht senden|absenden|abschicken)/i
+
+/** Card numbers, CVVs, passwords, IBANs — never autofilled, typed, or read into a field. */
+const SENSITIVE_FIELD_LABEL =
+  /(card ?number|credit card|cvv|cvc|security code|expiry|password|passcode|social security|iban|routing number|account number|passwort|kartennummer|kreditkarte|prüfziffer|ablaufdatum|sozialversicherungsnummer|kontonummer)/i
+
+/** Look up what a ref's label was last seen as, for the guard below. */
+function labelFor(tabId, ref) {
+  return refLabels.get(tabId)?.get(ref)
+}
+
+function refusal(label, kind) {
+  return {
+    isError: true,
+    content: [
+      {
+        type: 'text',
+        text:
+          `Refused: "${label}" looks like ${kind}, which JARVIS is not allowed to do. ` +
+          'Tell the user plainly that this needs to be done by hand, and do not try another way to reach the same element.',
+      },
+    ],
+  }
+}
+
 /** Pull a usable tabId out of a tabs_context reply. */
 function readTab(reply) {
   const blocks = reply?.result?.content
@@ -646,7 +714,12 @@ export function chromeServer({ allowWrites }) {
           .catch(undefined)
           .describe('Cap the tree size. Large pages are worth capping.'),
       },
-      forward('read_page'),
+      async (args) => {
+        const tabId = await resolveTab(args.tabId)
+        const out = await forward('read_page')(args)
+        rememberLabels(tabId, out)
+        return out
+      },
     ),
 
     tool(
@@ -671,7 +744,12 @@ export function chromeServer({ allowWrites }) {
         query: z.string().describe('What to look for, described naturally.'),
         tabId,
       },
-      forward('find'),
+      async (args) => {
+        const tabId = await resolveTab(args.tabId)
+        const out = await forward('find')(args)
+        rememberLabels(tabId, out)
+        return out
+      },
     ),
 
     tool(
@@ -744,7 +822,10 @@ export function chromeServer({ allowWrites }) {
         'chrome_click',
         'Click something on the page. Take the ref from chrome_read_page or ' +
           'chrome_find rather than guessing coordinates. Say what you are ' +
-          'about to do before doing anything irreversible.',
+          'about to do before doing anything irreversible. Buying, paying, ' +
+          'sending, subscribing and similar one-way actions are refused ' +
+          'outright — do not try a coordinate or a different ref to reach ' +
+          'the same button, tell the user it needs to be done by hand.',
         {
           ref: z.string().optional().catch(undefined).describe('A ref_N from chrome_read_page.'),
           coordinate: z
@@ -754,7 +835,16 @@ export function chromeServer({ allowWrites }) {
             .describe('[x, y] fallback when there is no ref.'),
           tabId,
         },
-        async (args) => forward('computer')({ action: 'left_click', ...args }),
+        async (args) => {
+          if (args.ref) {
+            const tabId = await resolveTab(args.tabId)
+            const label = labelFor(tabId, args.ref)
+            if (label && BLOCKED_ACTION_LABEL.test(label)) {
+              return refusal(label, 'a purchase, payment, or other one-way action')
+            }
+          }
+          return forward('computer')({ action: 'left_click', ...args })
+        },
       ),
 
       tool(
@@ -774,13 +864,22 @@ export function chromeServer({ allowWrites }) {
       tool(
         'chrome_form_input',
         'Set the value of a form field directly — more reliable than typing ' +
-          'for selects, checkboxes and long values.',
+          'for selects, checkboxes and long values. Refused for anything that ' +
+          'looks like a card number, CVV, password, or other credential field ' +
+          '— those are never entered by JARVIS, typed or otherwise.',
         {
           ref: z.string().describe('A ref_N from chrome_read_page.'),
           value: z.union([z.string(), z.number(), z.boolean()]),
           tabId,
         },
-        forward('form_input'),
+        async (args) => {
+          const tabId = await resolveTab(args.tabId)
+          const label = labelFor(tabId, args.ref)
+          if (label && (BLOCKED_ACTION_LABEL.test(label) || SENSITIVE_FIELD_LABEL.test(label))) {
+            return refusal(label, 'a payment, credential, or other one-way action')
+          }
+          return forward('form_input')(args)
+        },
       ),
 
       tool(
