@@ -23,6 +23,7 @@ import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
 import { obsidianServer } from './obsidian.mjs'
 import { mailServer, mailConfigured } from './mail.mjs'
+import { tour32Server } from './tour32.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -336,6 +337,13 @@ function decideTool(name) {
       return tool === 'mail_send' ? ALLOW_MAIL_SEND : true
     }
 
+    // Phil's TOUR32 support knowledge base. Reading and searching are not
+    // withheld, same reasoning as the vault and the mailbox. Writing a new
+    // case is real and irreversible the same way mail_send is, so it
+    // follows the same on-by-default, voice-gated pattern — see
+    // ALLOW_MAIL_SEND above for why that's the switch and not a restart.
+    if (server === 'jarvis_tour32') return true
+
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
       return ALLOW_WRITES
@@ -478,6 +486,15 @@ His mailbox — the \`mail_*\` tools, on his real Tobit David account:
   your own initiative, however clearly a reply seems to write itself. If the
   recipient or subject is at all ambiguous, confirm it back to him first.
 - If mail tools report they are not configured, say so plainly and move on.
+
+His TOUR32 support knowledge base — the \`tour32_*\` tools, on his real
+support-case folder:
+- \`tour32_search\` whenever a new support email needs a known fix — check the
+  case log and customer folders before answering from memory or guessing.
+- \`tour32_append_case\` writes a new case or solution into the real, working
+  case log. Only call it when Phil has said out loud, this conversation, to
+  record it — and follow the file's own schema, which \`tour32_read\` on
+  Wissensbasis_TOUR32.md shows you if you haven't seen it this session.
 
 Quick facts from the open web — weather, news, a score, an exchange rate,
 anything with no login and no page worth looking at: WebSearch or WebFetch,
@@ -1352,6 +1369,9 @@ wss.on('connection', (socket) => {
         // Phil's Tobit David mailbox over IMAP/SMTP. mail_send answers to its
         // own ALLOW_MAIL_SEND gate above, not ALLOW_WRITES.
         jarvis_mail: mailServer(),
+        // Phil's TOUR32 support knowledge base — read/search always on,
+        // tour32_append_case answers to the same voice-gate as mail_send.
+        jarvis_tour32: tour32Server(),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk

@@ -1,13 +1,16 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { ImapFlow } from 'imapflow'
-import nodemailer from 'nodemailer'
+import { connect as netConnect } from 'node:net'
+import { connect as tlsConnect } from 'node:tls'
+import { randomUUID } from 'node:crypto'
 
 /**
  * JARVIS's inbox: Phil's Tobit David mailbox, reached over plain IMAP/SMTP —
  * not Gmail, not a Google Workspace API. David exposes standard IMAP/SMTP
  * once "Remote Access nutzen" is switched on for the account, so this needs
- * no vendor SDK, only imapflow (IMAP) and nodemailer (SMTP).
+ * no vendor SDK, only imapflow (IMAP) and a hand-rolled SMTP client (below —
+ * see why nodemailer doesn't work here).
  *
  * Same shape as obsidian.mjs: reading opens a connection, does one thing,
  * closes it again — no persistent session to keep in sync with a mailbox
@@ -47,15 +50,89 @@ function imapClient() {
   })
 }
 
-function smtpTransport() {
-  return nodemailer.createTransport({
-    host: HOST,
-    port: SMTP_PORT,
-    secure: false,
-    requireTLS: true,
-    auth: { user: USER, pass: PASSWORD },
-    tls: TLS_OPTS,
+/**
+ * David's Postman SMTP service (port 587) never lists AUTH in its EHLO
+ * response — confirmed by hand while debugging the first send attempt — so
+ * nodemailer, which only authenticates when the server advertises support
+ * for it, silently connects anonymously and every RCPT then gets refused
+ * with "550 No such user here". A raw AUTH LOGIN sent anyway is accepted
+ * ("235 Authentication successful") — also confirmed by hand — so this talks
+ * SMTP directly instead of trusting the capability list.
+ */
+function readSmtpReply(sock) {
+  return new Promise((resolve, reject) => {
+    let buf = ''
+    const onData = (chunk) => {
+      buf += chunk.toString('utf8')
+      const lines = buf.split('\r\n').filter(Boolean)
+      const last = lines[lines.length - 1] ?? ''
+      // A reply is done on a line "NNN text" (space) — "NNN-text" (dash)
+      // means more lines follow.
+      if (/^\d{3} /.test(last)) {
+        cleanup()
+        resolve({ code: Number(last.slice(0, 3)), text: buf })
+      }
+    }
+    const onError = (err) => {
+      cleanup()
+      reject(err)
+    }
+    const cleanup = () => {
+      sock.removeListener('data', onData)
+      sock.removeListener('error', onError)
+    }
+    sock.on('data', onData)
+    sock.on('error', onError)
   })
+}
+
+async function smtpCommand(sock, cmd) {
+  if (cmd != null) sock.write(cmd + '\r\n')
+  const reply = await readSmtpReply(sock)
+  if (reply.code >= 400) throw new Error(`SMTP said: ${reply.text.trim()}`)
+  return reply
+}
+
+/** Escapes a line consisting of just "." per RFC 5321 dot-stuffing, and
+ *  normalizes line endings — a body built from spoken text can arrive with
+ *  bare \n, which some SMTP servers treat as a malformed line. */
+function stuffDots(text) {
+  return text.replace(/\r\n|\r|\n/g, '\r\n').replace(/^\./gm, '..')
+}
+
+async function smtpSend({ to, subject, body }) {
+  let sock = netConnect({ host: HOST, port: SMTP_PORT })
+  const TIMEOUT_MS = 15_000
+  sock.setTimeout(TIMEOUT_MS, () => sock.destroy(new Error('SMTP connection timed out')))
+  try {
+    await new Promise((resolve, reject) => {
+      sock.once('connect', resolve)
+      sock.once('error', reject)
+    })
+    await readSmtpReply(sock) // 220 greeting
+    await smtpCommand(sock, 'EHLO jarvis.local')
+    await smtpCommand(sock, 'STARTTLS')
+    sock = tlsConnect({ socket: sock, host: HOST, ...TLS_OPTS })
+    await new Promise((resolve, reject) => {
+      sock.once('secureConnect', resolve)
+      sock.once('error', reject)
+    })
+    await smtpCommand(sock, 'EHLO jarvis.local')
+    await smtpCommand(sock, 'AUTH LOGIN')
+    await smtpCommand(sock, Buffer.from(USER, 'utf8').toString('base64'))
+    await smtpCommand(sock, Buffer.from(PASSWORD, 'utf8').toString('base64'))
+    await smtpCommand(sock, `MAIL FROM:<${USER}>`)
+    await smtpCommand(sock, `RCPT TO:<${to}>`)
+    await smtpCommand(sock, 'DATA')
+    const headers =
+      `From: ${USER}\r\nTo: ${to}\r\nSubject: ${subject}\r\n` +
+      `Date: ${new Date().toUTCString()}\r\nMessage-ID: <${randomUUID()}@jarvis.local>\r\n` +
+      `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n`
+    await smtpCommand(sock, headers + stuffDots(body) + '\r\n.')
+    await smtpCommand(sock, 'QUIT')
+  } finally {
+    sock.destroy()
+  }
 }
 
 const NOT_CONFIGURED = {
@@ -242,9 +319,8 @@ export function mailServer() {
         },
         async (args) => {
           if (!mailConfigured()) return NOT_CONFIGURED
-          const transport = smtpTransport()
           try {
-            await transport.sendMail({ from: USER, to: args.to, subject: args.subject, text: args.body })
+            await smtpSend({ to: args.to, subject: args.subject, body: args.body })
             return { content: [{ type: 'text', text: `Sent to ${args.to}.` }] }
           } catch (err) {
             return errorResult('Send failed', err)
