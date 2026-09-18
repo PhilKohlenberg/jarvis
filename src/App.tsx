@@ -118,14 +118,22 @@ export default function App() {
     s.setPhase('dormant')
   }
 
-  /** Open the mic and wait. `window` is how long before he gives up. */
-  const listen = (window: number) => {
+  /**
+   * Open the mic and wait.
+   *
+   * No auto-close any more — `window` is unused now but kept in the signature
+   * so every call site (respond(), onUtterance(), onWake()) needs no change.
+   * The mic used to give up and mute itself after a silent stretch; now the
+   * only way it closes is the button, clicked again. Standing entirely idle
+   * costs nothing worth guarding against — the VAD still gates what actually
+   * gets recorded, this only ever controlled whether the track was open.
+   */
+  const listen = (_window: number) => {
     clearIdle()
     const s = store.getState()
     s.setCaption('')
     s.setPhase('listening')
     sfx.play('listen')
-    idleTimer.current = setTimeout(goDormant, window)
   }
 
   // -- one turn -------------------------------------------------------------
@@ -741,14 +749,17 @@ export default function App() {
         onWake('')
       }
     }
-    // Click anywhere on the reactor to start a turn. Only from standby, and
-    // never from a click that belonged to something — a blade, a button, a
-    // link — since those are read and dragged with the same mouse.
+    // Click anywhere on the reactor to toggle the mic — the same button
+    // opens it from standby and closes it again. Never from a click that
+    // belonged to something else — a blade, a button, a link — since those
+    // are read and dragged with the same mouse.
     const onClick = (e: MouseEvent) => {
-      if (store.getState().phase !== 'dormant') return
+      const phase = store.getState().phase
+      if (phase === 'offline' || phase === 'boot') return
       const el = e.target as HTMLElement | null
       if (el?.closest('button, a, input, textarea, [role="button"], .blade')) return
-      onWake('')
+      if (phase === 'dormant') onWake('')
+      else goDormant()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('click', onClick)
