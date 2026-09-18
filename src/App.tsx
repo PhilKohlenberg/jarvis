@@ -227,7 +227,10 @@ export default function App() {
       case 'boot':
         return 'deaf'
       case 'dormant':
-        return 'wake'
+        // Push to talk: the microphone stays shut until the user asks for it
+        // with a click or the space bar, rather than streaming the room to a
+        // transcriber while it waits for a wake word.
+        return 'deaf'
       case 'waking':
       case 'listening':
         return 'command'
@@ -680,11 +683,22 @@ export default function App() {
         onWake('')
       }
     }
+    // Click anywhere on the reactor to start a turn. Only from standby, and
+    // never from a click that belonged to something — a blade, a button, a
+    // link — since those are read and dragged with the same mouse.
+    const onClick = (e: MouseEvent) => {
+      if (store.getState().phase !== 'dormant') return
+      const el = e.target as HTMLElement | null
+      if (el?.closest('button, a, input, textarea, [role="button"], .blade')) return
+      onWake('')
+    }
     window.addEventListener('keydown', onKey)
+    window.addEventListener('click', onClick)
 
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('click', onClick)
       clearIdle()
       if (voicePoll.current) clearInterval(voicePoll.current)
       voice.current?.stop()

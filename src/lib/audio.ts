@@ -62,3 +62,12 @@ export function attachOutputAnalyser(el: HTMLAudioElement): () => number {
     return Math.min(1, sum / (b.length - 2) / 255 * 3)
   }
 }
+
+/** The real enabled state of the microphone track, for diagnostics. A disabled
+ *  track delivers silence, so this is the fact that "is he listening" turns on
+ *  — as opposed to whatever mode the app believes it is in. */
+export function micTrackEnabled(): boolean | null {
+  if (!stream) return null
+  const t = stream.getAudioTracks()[0]
+  return t ? t.enabled : null
+}

@@ -204,17 +204,14 @@ function score(v: SpeechSynthesisVoice): number {
   return s
 }
 
-/** Only voices that scored on a name match, not merely on being English —
- *  otherwise the picker cycles through a dozen US novelty voices. */
-const USABLE = 40
-
-/** Best-first list of usable voices — also what the voice picker cycles. */
+/** Best-first list of usable voices — also what the voice picker cycles. The
+ *  name scoring above was built for the English butler voices, so it cannot
+ *  rank the German set; every German voice is offered and merely ordered by it. */
 export function candidateVoices(): SpeechSynthesisVoice[] {
   return speechSynthesis
     .getVoices()
-    .filter((v) => /^en/i.test(v.lang))
+    .filter((v) => /^de/i.test(v.lang))
     .map((v) => ({ v, s: score(v) }))
-    .filter((x) => x.s >= USABLE)
     .sort((a, b) => b.s - a.s)
     .map((x) => x.v)
 }
@@ -236,7 +233,7 @@ function pickVoice(): SpeechSynthesisVoice | null {
     localStorage.removeItem(VOICE_PREF_KEY)
   }
 
-  cachedVoice = candidateVoices()[0] ?? all.find((v) => /^en/i.test(v.lang)) ?? null
+  cachedVoice = candidateVoices()[0] ?? all.find((v) => /^de/i.test(v.lang)) ?? null
   return cachedVoice
 }
 
@@ -477,7 +474,7 @@ export function createSpeaker(): Speaker {
       const u = new SpeechSynthesisUtterance(text)
       const voice = pickVoice()
       if (voice) u.voice = voice
-      u.lang = voice?.lang ?? 'en-GB'
+      u.lang = voice?.lang ?? 'de-DE'
       // Deliberate, and deliberately invariant — the character's pace does not
       // change with stakes, and that steadiness is most of the effect. This
       // lands around 130 wpm, below the median for film dialogue.

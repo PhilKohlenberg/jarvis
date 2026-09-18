@@ -1,5 +1,5 @@
 import { BRIDGE_HTTP_URL } from '../config'
-import { getMic } from './audio'
+import { getMic, micTrackEnabled } from './audio'
 import { speakingNow, speakingSince } from './tts'
 import { startVad, type Vad } from './vad'
 import { caps } from './capabilities'
@@ -336,6 +336,12 @@ export const diag = {
   engine: 'browser',
   /** Whether the microphone pipeline is live. */
   running: false,
+  /** Whether the microphone track is closed — push-to-talk on standby. */
+  muted: false,
+  /** The track's actual enabled state, which is what decides whether samples
+   *  arrive. Reported next to `muted` because the two disagreeing is exactly
+   *  the push-to-talk failure worth seeing. null before the mic is opened. */
+  track: null as boolean | null,
   /** Speech segments captured since load. */
   sessions: 0,
   /** The most recent transcript, whatever the mode. */
@@ -567,6 +573,9 @@ async function startElevenVoice(h: VoiceHandlers): Promise<Voice> {
   const guardPoll = setInterval(() => {
     const mode = h.mode()
     vad?.setGuard(mode === 'guard')
+    vad?.setMuted(mode === 'deaf')
+    diag.muted = mode === 'deaf'
+    diag.track = micTrackEnabled()
     // He has stood down — by Escape, by the idle timeout, or by dropping back
     // to the wake word. Anything half-said belonged to a conversation that is
     // over, and letting the hold expire later would open the next one with a
@@ -760,7 +769,7 @@ function startBrowserVoice(h: VoiceHandlers): Voice {
     rec = new Ctor()
     rec.continuous = true
     rec.interimResults = true
-    rec.lang = 'en-GB'
+    rec.lang = 'de-DE'
     rec.onstart = () => {
       running = true
       diag.running = true

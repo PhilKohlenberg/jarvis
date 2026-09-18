@@ -43,6 +43,8 @@ export type Vad = {
   /** Raise the trigger bar while JARVIS speaks, so his own playback leaking
    *  past echo cancellation does not register as the user talking. */
   setGuard: (on: boolean) => void
+  /** Close the microphone at the source while he is on standby. */
+  setMuted: (on: boolean) => void
   live: () => boolean
   /** Live internals, for the diagnostics panel. */
   meter: () => { energy: number; floor: number; threshold: number; speaking: boolean }
@@ -109,12 +111,12 @@ export async function startVad(h: VadHandlers): Promise<Vad> {
         ? 'Microphone access denied — voice input is unavailable.'
         : 'No microphone available.',
     )
-    return { stop: () => {}, setGuard: () => {}, live: () => false, meter: () => ({ energy: 0, floor: 0, threshold: 0, speaking: false }) }
+    return { stop: () => {}, setGuard: () => {}, setMuted: () => {}, live: () => false, meter: () => ({ energy: 0, floor: 0, threshold: 0, speaking: false }) }
   }
 
   if (typeof MediaRecorder === 'undefined') {
     h.onError('This browser cannot record audio — voice input is unavailable.')
-    return { stop: () => {}, setGuard: () => {}, live: () => false, meter: () => ({ energy: 0, floor: 0, threshold: 0, speaking: false }) }
+    return { stop: () => {}, setGuard: () => {}, setMuted: () => {}, live: () => false, meter: () => ({ energy: 0, floor: 0, threshold: 0, speaking: false }) }
   }
 
   const mime = pickMime()
@@ -131,6 +133,7 @@ export async function startVad(h: VadHandlers): Promise<Vad> {
 
   let stopped = false
   let guard = false
+  let muted = false
   let floor = 0.01
   let smoothEnergy = 0
   let threshold = 0
@@ -204,6 +207,14 @@ export async function startVad(h: VadHandlers): Promise<Vad> {
     if (stopped) return
     raf = requestAnimationFrame(tick)
 
+    // Muted is a closed microphone, not an ignored one: the track is disabled
+    // upstream of this, so there is nothing to measure and nothing to record.
+    if (muted) {
+      smoothEnergy = 0
+      h.onLevel(0)
+      return
+    }
+
     const energy = rms()
     smoothEnergy += (energy - smoothEnergy) * 0.5
     h.onLevel(Math.min(1, smoothEnergy * 12))
@@ -257,6 +268,9 @@ export async function startVad(h: VadHandlers): Promise<Vad> {
       stopped = true
       cancelAnimationFrame(raf)
       discardRecorder()
+      // The stream is shared and survives this Vad; leaving its track disabled
+      // would hand the next one a microphone it cannot open.
+      for (const t of stream.getAudioTracks()) t.enabled = true
       try {
         source.disconnect()
         void ctx.close()
@@ -266,6 +280,23 @@ export async function startVad(h: VadHandlers): Promise<Vad> {
     },
     setGuard: (on) => {
       guard = on
+    },
+    setMuted: (on) => {
+      const changed = muted !== on
+      muted = on
+      // Disabling the track is what actually shuts the microphone: it delivers
+      // silence at the source, so no samples reach the analyser or a recorder.
+      // The stream is shared and outlives any one Vad, so the track is written
+      // on every call rather than only on a change — a Vad that replaces one
+      // which muted it starts out believing the microphone is already open.
+      for (const t of stream.getAudioTracks()) t.enabled = !on
+      if (on && changed) {
+        // A segment caught mid-word belongs to a turn that is now over.
+        discardRecorder()
+        speaking = false
+        speechStartedAt = 0
+        armedAt = 0
+      }
     },
     live: () => !stopped,
     meter: () => ({ energy: smoothEnergy, floor, threshold, speaking }),

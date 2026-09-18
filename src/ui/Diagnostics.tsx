@@ -20,6 +20,8 @@ import { useStore } from '../store'
 
 type VoiceDiag = {
   running: boolean
+  muted: boolean
+  track: boolean | null
   sessions: number
   heard: string
   heardAt: number
@@ -105,6 +107,12 @@ export function Diagnostics() {
 
       <div className="diag-sec">LISTENING</div>
       <Row k="recogniser" v={v.running ? 'running' : 'STOPPED'} bad={!v.running} />
+      <Row k="mikrofon" v={v.muted ? 'ZU — klicken zum Sprechen' : 'offen'} bad={v.muted} />
+      <Row
+        k="mikrofon-spur"
+        v={v.track === null ? 'noch nicht geöffnet' : v.track ? 'AN' : 'AUS'}
+        bad={v.track === false}
+      />
       <Row k="sessions" v={String(v.sessions ?? 0)} />
       <Row
         k="silent for"
