@@ -55,8 +55,16 @@ export type Vad = {
 // ---------------------------------------------------------------------------
 
 /** How far above the noise floor the signal must rise to count as speech.
- *  The floor tracks the room, so this is a ratio, not an absolute level. */
-const TRIGGER_OVER_FLOOR = 2.6
+ *  The floor tracks the room, so this is a ratio, not an absolute level.
+ *
+ *  Raised from 2.6: at that ratio, talk from another room crossed it easily
+ *  whenever the room JARVIS sits in was quiet, since the floor it compares
+ *  against is local ambient noise, not distance to the speaker. This demands
+ *  a louder signal relative to that floor, which close speech clears
+ *  comfortably and a voice through a door or wall usually does not. Raise
+ *  further if distant speech still triggers him; lower it if he starts
+ *  missing quiet, close speech. */
+const TRIGGER_OVER_FLOOR = 4.2
 /** While he is speaking, demand this much more, so residual echo is ignored. */
 const GUARD_BOOST = 2.4
 /** Falling back below trigger×this ends the segment. Hysteresis stops a single
