@@ -93,9 +93,15 @@ const READ_DESCRIPTION = `Read one message in full by its UID (from mail_list or
 mail_search): sender, subject, date and the plain-text body. Marks it read.`
 
 const SEND_DESCRIPTION = `Send an email from Phil's own mailbox. Real, irreversible
-— it leaves the machine. Only call this after Phil has said out loud, in this
-conversation, to send it, and confirm the recipient and subject back to him
-first if there's any ambiguity.`
+— it leaves the machine the moment this returns, and there is no undo.
+
+Never call this speculatively, as part of "helping", or because a reply
+seems to write itself. Call it only when Phil has, in this conversation,
+explicitly told you to send this specific message — not implied it, not
+asked what you'd write. If the recipient, subject or content is at all
+uncertain, say back what you're about to send and get a yes before calling
+this, in the same breath you'd use before any other action that can't be
+undone.`
 
 export function mailServer() {
   return createSdkMcpServer({

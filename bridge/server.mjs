@@ -118,11 +118,18 @@ const ALLOW_BROWSER_WRITES = process.env.JARVIS_ALLOW_BROWSER_WRITES !== '0'
  * Sending mail, split out the same way browser writes are — its own gate,
  * not folded into ALLOW_WRITES. Reading the mailbox is harmless the way
  * reading the Obsidian vault is; sending is a message that leaves the
- * machine and can't be recalled, so unlike ALLOW_BROWSER_WRITES this
- * defaults OFF. Set JARVIS_ALLOW_MAIL_SEND=1 once you've actually decided
- * to let it send.
+ * machine and can't be recalled, which is exactly the browser's situation
+ * too — chrome_click can send a form, DM someone, post publicly. The
+ * codebase's answer there is not a machine switch you flip per occasion,
+ * it's ALLOW_BROWSER_WRITES defaulting on plus the persona only acting when
+ * told to, out loud, in the moment. Mail send follows the same pattern for
+ * the same reason: voice has no confirmation dialog to fall back to, so
+ * "only when Phil just said so" has to live in the system prompt's
+ * SEND_DESCRIPTION guidance, not in a switch that would need a restart
+ * every time he actually wants to use it. Set JARVIS_ALLOW_MAIL_SEND=0 to
+ * withhold the capability entirely, e.g. for a demo.
  */
-const ALLOW_MAIL_SEND = process.env.JARVIS_ALLOW_MAIL_SEND === '1'
+const ALLOW_MAIL_SEND = process.env.JARVIS_ALLOW_MAIL_SEND !== '0'
 
 /**
  * The orchestrator model. Override with JARVIS_MODEL to trade quality for pace
@@ -320,10 +327,10 @@ function decideTool(name) {
 
     // The mailbox. Reading (mail_list, mail_search, mail_read) is not
     // withheld behind ALLOW_WRITES, same reasoning as the vault above —
-    // nothing on the mail server changes. mail_send is the one tool this
-    // server exposes that does, and it answers to its own flag instead,
-    // checked here rather than deferred to the effectful-verb regex below
-    // so a "send" veto can never accidentally be satisfied by ALLOW_WRITES.
+    // nothing on the mail server changes. mail_send answers to
+    // ALLOW_MAIL_SEND instead, checked here rather than deferred to the
+    // effectful-verb regex below so a "send" veto can never accidentally
+    // be satisfied by ALLOW_WRITES.
     if (server === 'jarvis_mail') {
       const tool = mcpToolOf(name)
       return tool === 'mail_send' ? ALLOW_MAIL_SEND : true
