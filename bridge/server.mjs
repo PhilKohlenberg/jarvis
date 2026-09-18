@@ -26,6 +26,9 @@ import { mailServer, mailConfigured, mailCreds } from './mail.mjs'
 import { watchInbox } from './mailwatch.mjs'
 import { tour32Server } from './tour32.mjs'
 import { codeAgentServer } from './codeagent.mjs'
+import { pushConfigured, pushNotify } from './push.mjs'
+import { calendarServer, calendarConfigured } from './calendar.mjs'
+import { watchStatus } from './statuswatch.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -346,6 +349,11 @@ function decideTool(name) {
     // ALLOW_MAIL_SEND above for why that's the switch and not a restart.
     if (server === 'jarvis_tour32') return true
 
+    // Phil's calendar, over CalDAV — read-only, same as the vault and the
+    // mailbox. There is no write tool on this server at all (see
+    // calendar.mjs), so there is nothing here for ALLOW_WRITES to gate.
+    if (server === 'jarvis_calendar') return true
+
     // A real Claude Code session with full Bash/Edit/Write in a project
     // directory — the biggest hammer this bridge has. Answers to
     // ALLOW_WRITES itself, the same hard switch already gating raw Bash and
@@ -511,6 +519,28 @@ support-case folder:
   case log. Only call it when Phil has said out loud, this conversation, to
   record it — and follow the file's own schema, which \`tour32_read\` on
   Wissensbasis_TOUR32.md shows you if you haven't seen it this session.
+
+Morgenbriefing — triggered by "Morgenbriefing bitte" (sent automatically on
+the first wake of the day, or spoken any time Phil asks for it):
+- Gather, in this order, stopping early on nothing: \`mail_list\` (INBOX,
+  unread since last check reads well enough — just report what's new),
+  \`tour32_read\` on Wissensbasis_TOUR32.md for the "## Aktive / offene Fälle"
+  section, \`obsidian_list\` on "00 Inbox", \`calendar_events\` (default range —
+  today).
+- Speak it as one continuous short briefing, not a list read aloud: new mail
+  count and who from, open TOUR32 cases in one clause, Inbox items in one
+  clause. If a category is empty, skip the clause entirely rather than
+  saying "nothing new" for it — silence says the same thing faster.
+- This is the one case where the two-sentence ceiling above does not apply —
+  it is exactly the "reading out data they asked for" exception already
+  named there.
+
+His calendar — \`calendar_events\`, on his real David calendar over CalDAV:
+- Read-only, no confirmation ever needed. Reach for it whenever he asks
+  what's on today or in the coming days, or as part of a morning briefing.
+- A recurring event is reported as recurring, not dated — say so plainly
+  ("wiederkehrend") rather than inventing a specific occurrence date.
+- If it reports itself unconfigured, say so plainly and move on.
 
 A real coding agent — \`code_run_task\`, one project directory at a time:
 - Only reach for it once Phil has clearly asked for code to be written,
@@ -1217,24 +1247,55 @@ if (mailConfigured()) {
       console.log(`[jarvis] new mail from ${from}: ${subject}`)
       const looksLikeCase = SUPPORT_CASE_RE.test(`${subject} ${body}`)
       if (!looksLikeCase) {
-        broadcast({ type: 'notify', text: `Neue E-Mail von ${from}, Betreff: ${subject}` })
+        const text = `Neue E-Mail von ${from}, Betreff: ${subject}`
+        broadcast({ type: 'notify', text })
+        void pushNotify(text, { title: 'JARVIS · neue Mail' })
         return
       }
       broadcast({ type: 'notify', text: `Neue Support-Mail von ${from}, Betreff: ${subject}. Ich durchsuche die Wissensbasis.` })
       triageSupportMail({ from, subject, body: body ?? '' })
         .then((answer) => {
-          broadcast({
-            type: 'notify',
-            text: answer || `Zu "${subject}" habe ich in der Wissensbasis nichts Passendes gefunden.`,
-          })
+          const text = answer || `Zu "${subject}" habe ich in der Wissensbasis nichts Passendes gefunden.`
+          broadcast({ type: 'notify', text })
+          void pushNotify(text, { title: 'JARVIS · Auto-Triage' })
         })
         .catch((err) => {
           console.error('[jarvis] triage failed:', err?.message ?? err)
-          broadcast({ type: 'notify', text: `Die automatische Suche zu "${subject}" ist fehlgeschlagen.` })
+          const text = `Die automatische Suche zu "${subject}" ist fehlgeschlagen.`
+          broadcast({ type: 'notify', text })
+          void pushNotify(text, { title: 'JARVIS · Auto-Triage' })
         })
     },
   })
   console.log('[jarvis] watching inbox for new mail, auto-triaging support cases')
+}
+
+/**
+ * Uptime watch on a server Phil actually depends on. No target was picked
+ * for him — the David/WebBox host is what mail and the calendar both sit
+ * on, so it's the one piece of infrastructure whose downtime he'd most want
+ * to hear about, and it's already known reachable on port 443 (see
+ * calendar.mjs). JARVIS_STATUS_URL overrides it for a different target.
+ */
+const STATUS_URL =
+  process.env.JARVIS_STATUS_URL ??
+  (process.env.JARVIS_MAIL_HOST ? `https://${process.env.JARVIS_MAIL_HOST}/` : '')
+
+if (STATUS_URL) {
+  watchStatus({
+    url: STATUS_URL,
+    onChange: ({ up, error }) => {
+      const text = up
+        ? `${STATUS_URL} ist wieder erreichbar.`
+        : `${STATUS_URL} ist nicht erreichbar${error ? ` (${error})` : ''}.`
+      console.log(`[jarvis] status watch: ${text}`)
+      broadcast({ type: 'notify', text })
+      void pushNotify(text, { title: 'JARVIS · Status' })
+    },
+  })
+  console.log(`[jarvis] watching ${STATUS_URL} for uptime`)
+} else {
+  console.log('[jarvis] status watch disabled — set JARVIS_STATUS_URL or JARVIS_MAIL_HOST')
 }
 
 console.log(`[jarvis] bridge listening on ws://localhost:${PORT}`)
@@ -1255,6 +1316,16 @@ console.log(
     ? `[jarvis] mail reading ready · sending ${ALLOW_MAIL_SEND ? 'ENABLED' : 'disabled'}` +
         (ALLOW_MAIL_SEND ? '' : ' — set JARVIS_ALLOW_MAIL_SEND=1 to permit it')
     : '[jarvis] mail not configured — set JARVIS_MAIL_HOST, JARVIS_MAIL_USER, JARVIS_MAIL_PASSWORD',
+)
+console.log(
+  pushConfigured()
+    ? '[jarvis] push notifications ready (ntfy)'
+    : '[jarvis] push notifications disabled — set JARVIS_NTFY_TOPIC to enable',
+)
+console.log(
+  calendarConfigured()
+    ? '[jarvis] calendar ready (CalDAV)'
+    : '[jarvis] calendar not configured — reuses JARVIS_MAIL_HOST/USER/PASSWORD',
 )
 // Asynchronous, so it lands a beat after the rest of the banner. Worth printing
 // at all because an extension that is simply not running is indistinguishable
@@ -1488,6 +1559,8 @@ wss.on('connection', (socket) => {
         // A real coding agent per task — answers to ALLOW_WRITES itself,
         // see decideTool above.
         jarvis_code: codeAgentServer(),
+        // Phil's David calendar, over CalDAV — read-only, no write tool exists.
+        jarvis_calendar: calendarServer(),
       },
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk

@@ -71,6 +71,32 @@ const BARE_NAME = new RegExp(`^(?:hey|hi|ok|okay|yo)?\\s*${NAME}[\\s,.!?]*$`, 'i
 /** A leading vocative on a real command: "Jarvis, what's the weather". */
 const LEADING_NAME = new RegExp(`^(?:hey|hi|ok|okay|yo)?\\s*${NAME}\\b[\\s,.:!?-]*`, 'i')
 
+/**
+ * The morning briefing fires once per calendar day, on the first plain wake
+ * (name only, nothing asked in the same breath) — not on every wake. The date
+ * lives in localStorage rather than on the bridge: the bridge is stateless
+ * between connections by design (see server.mjs), and this machine only ever
+ * runs JARVIS from the one real Chrome window the mic requires anyway, so the
+ * browser's own storage is a fine place for a once-a-day marker.
+ */
+const BRIEFING_DATE_KEY = 'jarvis-last-briefing-date'
+const todayKey = () => new Date().toDateString()
+const briefingDueToday = () => {
+  try {
+    return localStorage.getItem(BRIEFING_DATE_KEY) !== todayKey()
+  } catch {
+    return false
+  }
+}
+const markBriefingDone = () => {
+  try {
+    localStorage.setItem(BRIEFING_DATE_KEY, todayKey())
+  } catch {
+    /* best-effort — worst case the briefing repeats on the next wake */
+  }
+}
+const BRIEFING_TRIGGER = 'Morgenbriefing bitte.'
+
 export default function App() {
   const store = useStore
   const phase = useStore((s) => s.phase)
@@ -268,6 +294,16 @@ export default function App() {
     // greeting he didn't need is the most common way an assistant wastes time.
     if (trailing) {
       void respond(trailing)
+      return
+    }
+
+    // First plain wake of the day: skip the bare greeting and go straight
+    // into the briefing instead. Marked done before respond() resolves, not
+    // after, so a wake that gets interrupted mid-briefing doesn't retrigger
+    // it on the very next wake.
+    if (briefingDueToday()) {
+      markBriefingDone()
+      void respond(BRIEFING_TRIGGER)
       return
     }
 
