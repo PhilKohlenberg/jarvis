@@ -39,6 +39,11 @@ export const mailConfigured = () => Boolean(HOST && USER && PASSWORD)
 // Set JARVIS_MAIL_TLS_STRICT=1 once the server has a cert that validates.
 const TLS_OPTS = { rejectUnauthorized: process.env.JARVIS_MAIL_TLS_STRICT === '1' }
 
+/** For mailwatch.mjs, which needs its own dedicated connection (IDLE holds
+ *  one open indefinitely, unlike every other function here) rather than
+ *  reaching into this module's internals. */
+export const mailCreds = () => ({ host: HOST, user: USER, pass: PASSWORD, tlsOpts: TLS_OPTS })
+
 function imapClient() {
   return new ImapFlow({
     host: HOST,

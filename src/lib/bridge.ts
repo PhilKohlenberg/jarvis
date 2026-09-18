@@ -90,6 +90,15 @@ export function watchBlades(fn: (blade: Blade) => void) {
   onBlade = fn
 }
 
+/** Proactive, out-of-band lines the bridge speaks on its own — currently
+ *  just new-mail alerts from the live inbox watch — not tied to any turn or
+ *  `ask`, so they arrive on this socket-level dispatcher rather than the
+ *  turn-scoped one in `ask()` below. */
+let onNotify: ((text: string) => void) | null = null
+export function watchNotify(fn: (text: string) => void) {
+  onNotify = fn
+}
+
 /** Commands that redress the interface — theme, reactor, orbits, effects. Same
  *  out-of-band route as panels: JARVIS issues them while he is still mid-answer
  *  so the change is on screen as he says it, which means they cannot ride back
@@ -203,6 +212,8 @@ function dispatch(ws: WebSocket) {
           .then(reply)
           .catch((err) => reply({ error: String(err?.message ?? err) }))
       }
+    } else if (msg.type === 'notify' && msg.text) {
+      onNotify?.(msg.text)
     } else if (msg.type === 'ui' && msg.op) {
       // A `ui` frame with no args is normal — reset and clear take none — so an
       // absent args object is an empty one, not a reason to drop the command.

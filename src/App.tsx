@@ -23,6 +23,7 @@ import {
   watchServers,
   watchPanels,
   watchBlades,
+  watchNotify,
   watchCapture,
   watchUi,
   watchConnection,
@@ -105,16 +106,18 @@ export default function App() {
     speaker.current = null
   }
 
+  /**
+   * Closes the mic. Deliberately does NOT touch speech: no `silence()`, no
+   * `turn.current` bump. Phil asked for this explicitly — muting yourself is
+   * about not being heard, not about cutting JARVIS off. A genuinely new
+   * question still invalidates whatever he was mid-sentence on, because
+   * respond() bumps `turn.current` itself the moment it starts; this
+   * function just isn't one of the places that does.
+   */
   const goDormant = () => {
     clearIdle()
-    silence()
-    turn.current++
     const s = store.getState()
     s.setCaption('')
-    s.setActiveTool(null)
-    music.working(false)
-    music.duck(false)
-    sfx.duck(false)
     s.setPhase('dormant')
   }
 
@@ -414,6 +417,15 @@ export default function App() {
     watchServers((servers) => store.getState().setConnected(servers))
     watchPanels((panel) => store.getState().pushPanel(panel))
     watchBlades((blade) => store.getState().pushBlade(blade))
+    // A new-mail alert from the bridge's own live inbox watch — not tied to
+    // any turn, can land at any time, so it gets its own speaker rather than
+    // going through respond()/onTyped's turn machinery.
+    watchNotify((text) => {
+      const spk = createSpeaker()
+      speaker.current = spk
+      spk.say(text)
+      void spk.end()
+    })
 
     /**
      * JARVIS asking to see something.

@@ -22,7 +22,8 @@ import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
 import { obsidianServer } from './obsidian.mjs'
-import { mailServer, mailConfigured } from './mail.mjs'
+import { mailServer, mailConfigured, mailCreds } from './mail.mjs'
+import { watchInbox } from './mailwatch.mjs'
 import { tour32Server } from './tour32.mjs'
 import { codeAgentServer } from './codeagent.mjs'
 import { homedir, tmpdir } from 'node:os'
@@ -1150,6 +1151,33 @@ const wss = new WebSocketServer({
 })
 server.listen(PORT)
 
+/**
+ * Every open browser tab, for the mail watcher below to push to. Separate
+ * from anything turn-scoped — this has to reach every connected socket, not
+ * just the one a `send` closure inside wss.on('connection') already has.
+ */
+const liveSockets = new Set()
+function broadcast(msg) {
+  const json = JSON.stringify(msg)
+  for (const s of liveSockets) {
+    if (s.readyState === s.OPEN) s.send(json)
+  }
+}
+
+// A live watch on the inbox, running for the life of the bridge process
+// rather than per connection — see mailwatch.mjs. Only started once mail is
+// actually configured, and once, not per WebSocket connection.
+if (mailConfigured()) {
+  watchInbox({
+    ...mailCreds(),
+    onNewMail: ({ from, subject }) => {
+      console.log(`[jarvis] new mail from ${from}: ${subject}`)
+      broadcast({ type: 'notify', text: `Neue E-Mail von ${from}, Betreff: ${subject}` })
+    },
+  })
+  console.log('[jarvis] watching inbox for new mail')
+}
+
 console.log(`[jarvis] bridge listening on ws://localhost:${PORT}`)
 console.log(
   `[jarvis] speech ${elevenKey() ? 'via ElevenLabs (key from MCP config)' : 'using browser fallback voice'}`,
@@ -1201,6 +1229,7 @@ const RESULT_FAILURES = {
 
 wss.on('connection', (socket) => {
   console.log('[jarvis] client connected')
+  liveSockets.add(socket)
 
   // Answer the HUD straight away rather than making it wait for the agent's
   // first turn. Refined later by the real init message.
@@ -1655,6 +1684,7 @@ wss.on('connection', (socket) => {
 
   socket.on('close', () => {
     console.log('[jarvis] client disconnected')
+    liveSockets.delete(socket)
     closed = true
     deliver?.(null)
     session.close?.()
